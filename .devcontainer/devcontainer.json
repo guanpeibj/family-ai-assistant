@@ -1,0 +1,59 @@
+{
+  "name": "Family AI Assistant Dev",
+  "dockerComposeFile": [
+    "../docker-compose.yml",
+    "docker-compose.dev.yml"
+  ],
+  "service": "faa-api",
+  "workspaceFolder": "/app",
+  
+  // 使用的功能
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  
+  // 端口转发
+  "forwardPorts": [8000, 5432],
+  "portsAttributes": {
+    "8000": {
+      "label": "FastAPI",
+      "onAutoForward": "notify"
+    },
+    "5432": {
+      "label": "PostgreSQL",
+      "onAutoForward": "silent"
+    }
+  },
+  
+  // 环境变量
+  "remoteEnv": {
+    "PYTHONPATH": "/app"
+  },
+  
+  // 启动后命令
+  "postCreateCommand": "pip install -e . && pip install httpx pytest pytest-asyncio",
+  "postStartCommand": "docker-compose logs -f postgres &",
+  
+  // VS Code 设置
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.linting.enabled": true,
+        "python.linting.pylintEnabled": false,
+        "python.formatting.provider": "black",
+        "python.testing.pytestEnabled": true,
+        "editor.formatOnSave": true,
+        "files.autoSave": "afterDelay"
+      },
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-azuretools.vscode-docker",
+        "tamasfe.even-better-toml",
+        "streetsidesoftware.code-spell-checker"
+      ]
+    }
+  }
+} 

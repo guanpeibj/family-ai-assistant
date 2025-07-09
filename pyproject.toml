@@ -1,0 +1,27 @@
+[project]
+name = "family-ai-assistant"
+version = "0.1.0"
+description = "AI-powered family assistant"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "sqlalchemy>=2.0.0",
+    "asyncpg>=0.29.0",
+    "pgvector>=0.2.4",
+    "openai>=1.90.0",
+    "httpx>=0.26.0",
+    "python-multipart>=0.0.6",
+    "structlog>=24.1.0",
+    "mcp>=1.10.1",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]

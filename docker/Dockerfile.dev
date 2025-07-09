@@ -1,0 +1,32 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# 安装系统依赖和开发工具
+RUN apt-get update && apt-get install -y \
+    gcc \
+    postgresql-client \
+    git \
+    vim \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装Python包管理工具
+RUN pip install --no-cache-dir uv
+
+# 复制依赖文件
+COPY pyproject.toml .
+
+# 安装项目依赖（可编辑模式）
+RUN uv venv .venv && \
+    . .venv/bin/activate && \
+    uv pip install -e .
+
+# 安装开发依赖
+RUN . .venv/bin/activate && \
+    uv pip install httpx pytest pytest-asyncio ipython
+
+# 设置PATH包含虚拟环境
+ENV PATH="/app/.venv/bin:$PATH"
+
+EXPOSE 8000 

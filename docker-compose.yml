@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: faa_user
+      POSTGRES_PASSWORD: faa_password
+      POSTGRES_DB: faa_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U faa_user -d faa_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  faa-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - THREEMA_ID=${THREEMA_ID}
+      - THREEMA_SECRET=${THREEMA_SECRET}
+      - ALLOWED_USERS=${ALLOWED_USERS}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+  faa-mcp:
+    build:
+      context: ./mcp-server
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MCP_TRANSPORT=stdio
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./mcp-server:/app
+    command: python generic_mcp_server.py
+
+volumes:
+  postgres_data:

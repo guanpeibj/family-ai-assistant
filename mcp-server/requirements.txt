@@ -1,0 +1,6 @@
+mcp>=1.10.1
+sqlalchemy>=2.0.0
+asyncpg>=0.29.0
+pgvector>=0.2.4
+structlog>=24.1.0
+openai>=1.90.0
