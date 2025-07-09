@@ -64,6 +64,9 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
     
+    # 关闭AI引擎
+    await ai_engine.close()
+    
     # 关闭数据库
     await close_db()
 

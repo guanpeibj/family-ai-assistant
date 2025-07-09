@@ -7,12 +7,17 @@ RUN apt-get update && apt-get install -y \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装Python依赖
+# 复制requirements
 COPY requirements.txt .
+
+# 安装Python依赖
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 复制代码
+# 复制应用代码
 COPY . .
 
-# MCP 服务通过 stdio 通信
-CMD ["python", "generic_mcp_server.py"]
+# 暴露端口
+EXPOSE 8000
+
+# 运行HTTP包装器
+CMD ["python", "mcp_http_wrapper.py"]

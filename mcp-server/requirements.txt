@@ -1,6 +1,17 @@
-mcp>=1.10.1
-sqlalchemy>=2.0.0
-asyncpg>=0.29.0
-pgvector>=0.2.4
-structlog>=24.1.0
-openai>=1.90.0
+# MCP相关
+mcp>=1.1.0
+
+# 数据库
+asyncpg>=0.30.0
+pgvector>=0.3.6
+
+# AI和向量
+openai>=1.56.2
+numpy>=1.24.0
+
+# Web框架（用于HTTP包装器）
+fastapi>=0.115.0
+uvicorn>=0.34.0
+
+# 其他
+python-dotenv>=1.0.1
