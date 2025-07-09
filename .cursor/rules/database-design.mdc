@@ -1,0 +1,110 @@
+---
+globs: *.sql,scripts/init_db.sql,src/db/*.py
+---
+# 数据库设计规则
+
+## 核心理念：AI 驱动的数据模型
+
+### 1. 通用记忆表设计
+```sql
+-- 核心表：memories
+CREATE TABLE memories (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    user_id VARCHAR(50) NOT NULL,
+    
+    -- AI 驱动的核心字段
+    content TEXT NOT NULL,              -- 原始内容
+    ai_understanding JSONB NOT NULL,    -- AI 理解的所有信息（完全自由）
+    embedding vector(1536),             -- 语义向量（用于相似度搜索）
+    
+    -- 精确查询支持（AI 识别后填充）
+    amount NUMERIC(10,2),               -- 金额（可选）
+    occurred_at TIMESTAMP WITH TIME ZONE, -- 事件时间（可选）
+    
+    -- 索引支持
+    INDEX idx_user_created (user_id, created_at DESC),
+    INDEX idx_user_amount (user_id, amount),
+    INDEX idx_user_occurred (user_id, occurred_at)
+);
+```
+
+### 2. JSONB 使用原则
+```sql
+-- ❌ 错误：固定结构
+ai_understanding JSONB CHECK (
+    ai_understanding ? 'category' AND 
+    ai_understanding ? 'type'
+)
+
+-- ✅ 正确：完全开放
+ai_understanding JSONB NOT NULL  -- AI 想存什么就存什么
+```
+
+### 3. 向量搜索设计
+```sql
+-- 创建向量索引
+CREATE INDEX idx_embedding ON memories 
+USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 100);
+
+-- 混合搜索示例
+SELECT * FROM memories
+WHERE user_id = $1
+  AND embedding <=> $2 < 0.3  -- 语义相似度
+  AND amount > 100            -- 精确过滤
+ORDER BY embedding <=> $2;
+```
+
+## 提醒表设计（极简）
+```sql
+CREATE TABLE reminders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    memory_id UUID REFERENCES memories(id),
+    remind_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    sent_at TIMESTAMP WITH TIME ZONE,  -- NULL 表示未发送
+    
+    INDEX idx_pending (remind_at, sent_at)
+    WHERE sent_at IS NULL  -- 部分索引，只索引未发送的
+);
+```
+
+## 数据库操作原则
+
+### 1. 使用 SQLAlchemy ORM
+```python
+# 模型定义保持简单
+class Memory(Base):
+    __tablename__ = "memories"
+    
+    id = Column(UUID, primary_key=True, default=uuid.uuid4)
+    content = Column(Text, nullable=False)
+    ai_understanding = Column(JSONB, nullable=False)
+    embedding = Column(Vector(1536))
+    # ... 其他字段
+```
+
+### 2. 查询优化
+- 使用异步数据库操作（asyncpg）
+- 批量操作使用 bulk_insert_mappings
+- 复杂查询考虑使用原生 SQL
+
+### 3. 数据迁移
+- 使用 Alembic 管理数据库迁移
+- 保持向后兼容（只增不删）
+- JSONB 字段天然支持模式演化
+
+## pgvector 最佳实践
+- 向量维度固定为 1536（OpenAI embeddings）
+- 使用 IVFFlat 索引，lists 参数根据数据量调整
+- 相似度阈值通常设置为 0.3-0.5
+
+## 注意事项
+- 不要过度规范化，保持表结构简单
+- 信任 PostgreSQL 的 JSONB 性能
+- 定期 VACUUM ANALYZE 优化查询性能
+
+## 文件引用
+- 数据库初始化：[init_db.sql](mdc:scripts/init_db.sql)
+- 模型定义：[models.py](mdc:src/db/models.py)
+- 数据库连接：[database.py](mdc:src/db/database.py)

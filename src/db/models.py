@@ -1,10 +1,44 @@
-from sqlalchemy import Column, String, DateTime, Text, Float, Index, Numeric
+from sqlalchemy import Column, String, DateTime, Text, Float, Index, Numeric, Boolean, ForeignKey, Enum, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
 from pgvector.sqlalchemy import Vector
 import uuid
+import enum
 
 from .database import Base
+
+
+class ChannelType(enum.Enum):
+    """支持的渠道类型"""
+    THREEMA = "threema"
+    EMAIL = "email"
+    WECHAT = "wechat"
+
+
+class User(Base):
+    """用户表 - 统一用户身份"""
+    __tablename__ = 'users'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # 未来可以添加更多用户属性，但现在保持极简
+
+
+class UserChannel(Base):
+    """用户渠道绑定表"""
+    __tablename__ = 'user_channels'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
+    channel = Column(Enum(ChannelType), nullable=False)
+    channel_user_id = Column(String(255), nullable=False)  # Threema ID、邮箱、OpenID等
+    channel_data = Column(JSONB)  # 渠道特定数据（如昵称等）
+    is_primary = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    __table_args__ = (
+        UniqueConstraint('channel', 'channel_user_id', name='uq_channel_user'),
+    )
 
 
 class Memory(Base):
@@ -13,7 +47,7 @@ class Memory(Base):
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
-    user_id = Column(String(50), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False, index=True)
     
     # 核心数据
     content = Column(Text, nullable=False)  # 原始内容

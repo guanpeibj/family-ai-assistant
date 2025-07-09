@@ -1,296 +1,344 @@
+#!/usr/bin/env python3
 """
-通用MCP Server - 提供基础数据操作能力，不预设业务逻辑
+通用 MCP 服务端 - 完全 AI 驱动，不包含任何业务逻辑
 """
 import asyncio
 import json
+import os
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+import uuid
+
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-import structlog
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-import openai
+from mcp.types import Tool, TextContent
+import asyncpg
 import numpy as np
-import os
+from openai import AsyncOpenAI
 
-logger = structlog.get_logger()
+# 环境变量
+DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://faa:faa@localhost:5432/family_assistant')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+
+# OpenAI 客户端
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 
 class GenericMCPServer:
     def __init__(self):
-        self.server = Server("family-ai-mcp")
-        self.database_url = os.getenv("DATABASE_URL", "postgresql+asyncpg://faa_user:faa_password@postgres:5432/faa_db")
-        self.openai_api_key = os.getenv("OPENAI_API_KEY")
-        self.engine = create_async_engine(self.database_url)
-        self.openai_client = openai.AsyncClient(api_key=self.openai_api_key)
+        self.server = Server("family-assistant")
+        self.pool = None
         self._setup_tools()
     
+    async def initialize(self):
+        """初始化数据库连接池"""
+        self.pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
+    
+    async def close(self):
+        """关闭连接池"""
+        if self.pool:
+            await self.pool.close()
+    
     def _setup_tools(self):
-        """注册通用工具 - 不预设具体业务逻辑"""
+        """注册所有通用工具"""
         
         @self.server.tool()
-        async def store(content: str, ai_data: Dict[str, Any], user_id: str) -> Dict[str, Any]:
-            """存储信息 - 完全由AI决定存什么"""
-            async with AsyncSession(self.engine) as session:
-                try:
-                    # 生成embedding
-                    embedding = await self._generate_embedding(content)
+        async def store(
+            content: str,
+            ai_data: Dict[str, Any],
+            user_id: str
+        ) -> Dict[str, Any]:
+            """存储任何 AI 认为需要记住的信息"""
+            try:
+                async with self.pool.acquire() as conn:
+                    # 生成向量（如果有 OpenAI API）
+                    embedding = None
+                    if openai_client:
+                        response = await openai_client.embeddings.create(
+                            model="text-embedding-3-small",
+                            input=content
+                        )
+                        embedding = response.data[0].embedding
                     
-                    # 提取精确数据（如果AI提供了）
-                    amount = None
-                    if 'amount' in ai_data:
-                        try:
-                            amount = float(ai_data['amount'])
-                        except:
-                            pass
+                    # 提取 AI 识别的金额和时间（如果有）
+                    amount = ai_data.get('amount')
+                    occurred_at = ai_data.get('occurred_at')
+                    if occurred_at and isinstance(occurred_at, str):
+                        occurred_at = datetime.fromisoformat(occurred_at)
                     
-                    occurred_at = None
-                    if 'occurred_at' in ai_data:
-                        try:
-                            occurred_at = datetime.fromisoformat(ai_data['occurred_at'])
-                        except:
-                            pass
-                    
-                    # 使用参数化查询插入数据
-                    result = await session.execute(
-                        text("""
-                            INSERT INTO memories (user_id, content, ai_understanding, embedding, amount, occurred_at)
-                            VALUES (:user_id, :content, :ai_understanding::jsonb, :embedding, :amount, :occurred_at)
-                            RETURNING id
-                        """),
-                        {
-                            'user_id': user_id,
-                            'content': content,
-                            'ai_understanding': json.dumps(ai_data, ensure_ascii=False),
-                            'embedding': embedding,
-                            'amount': amount,
-                            'occurred_at': occurred_at
-                        }
+                    # 插入记忆
+                    memory_id = await conn.fetchval(
+                        """
+                        INSERT INTO memories (
+                            id, user_id, content, ai_understanding, 
+                            embedding, amount, occurred_at
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        RETURNING id
+                        """,
+                        uuid.uuid4(),
+                        uuid.UUID(user_id),
+                        content,
+                        json.dumps(ai_data),
+                        embedding,
+                        amount,
+                        occurred_at
                     )
                     
-                    memory_id = result.scalar()
-                    await session.commit()
-                    
-                    return {"success": True, "id": str(memory_id)}
-                except Exception as e:
-                    logger.error(f"Store error: {e}")
-                    return {"success": False, "error": str(e)}
+                    return {
+                        "success": True,
+                        "id": str(memory_id),
+                        "message": "信息已存储"
+                    }
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": str(e)
+                }
         
         @self.server.tool()
-        async def search(query: str, user_id: Optional[str] = None, filters: Optional[Dict] = None) -> List[Dict]:
-            """搜索信息 - 支持语义搜索和精确查询"""
-            async with AsyncSession(self.engine) as session:
-                try:
-                    # 构建查询
-                    conditions = []
-                    params = {}
+        async def search(
+            query: str,
+            user_id: str,
+            filters: Optional[Dict[str, Any]] = None
+        ) -> List[Dict[str, Any]]:
+            """搜索相关记忆，支持语义和精确查询"""
+            try:
+                async with self.pool.acquire() as conn:
+                    results = []
                     
-                    if user_id:
-                        conditions.append("user_id = :user_id")
-                        params['user_id'] = user_id
-                    
-                    # 精确过滤条件
-                    if filters:
-                        if 'min_amount' in filters:
-                            conditions.append("amount >= :min_amount")
-                            params['min_amount'] = filters['min_amount']
-                        if 'max_amount' in filters:
-                            conditions.append("amount <= :max_amount")
-                            params['max_amount'] = filters['max_amount']
-                        if 'date_from' in filters:
-                            conditions.append("occurred_at >= :date_from")
-                            params['date_from'] = filters['date_from']
-                        if 'date_to' in filters:
-                            conditions.append("occurred_at <= :date_to")
-                            params['date_to'] = filters['date_to']
-                    
-                    where_clause = " AND ".join(conditions) if conditions else "1=1"
-                    
-                    # 语义搜索或时间排序
-                    if query:
-                        query_embedding = await self._generate_embedding(query)
-                        sql = f"""
-                            SELECT id, content, ai_understanding, amount, occurred_at, created_at,
-                                   embedding <-> :embedding::vector as distance
-                            FROM memories
-                            WHERE {where_clause}
-                            ORDER BY distance
-                            LIMIT 20
+                    # 如果有查询文本，进行语义搜索
+                    if query and openai_client:
+                        # 生成查询向量
+                        response = await openai_client.embeddings.create(
+                            model="text-embedding-3-small",
+                            input=query
+                        )
+                        query_embedding = response.data[0].embedding
+                        
+                        # 构建查询
+                        sql = """
+                        SELECT id, content, ai_understanding, amount, occurred_at,
+                               1 - (embedding <=> $1::vector) as similarity
+                        FROM memories
+                        WHERE user_id = $2
                         """
-                        params['embedding'] = query_embedding
+                        params = [query_embedding, uuid.UUID(user_id)]
+                        
+                        # 添加过滤条件
+                        if filters:
+                            if 'date_from' in filters:
+                                sql += f" AND occurred_at >= ${len(params) + 1}"
+                                params.append(datetime.fromisoformat(filters['date_from']))
+                            if 'date_to' in filters:
+                                sql += f" AND occurred_at <= ${len(params) + 1}"
+                                params.append(datetime.fromisoformat(filters['date_to']))
+                            if 'min_amount' in filters:
+                                sql += f" AND amount >= ${len(params) + 1}"
+                                params.append(filters['min_amount'])
+                            if 'max_amount' in filters:
+                                sql += f" AND amount <= ${len(params) + 1}"
+                                params.append(filters['max_amount'])
+                        
+                        sql += " ORDER BY similarity DESC LIMIT 20"
+                        
+                        rows = await conn.fetch(sql, *params)
                     else:
-                        sql = f"""
-                            SELECT id, content, ai_understanding, amount, occurred_at, created_at
-                            FROM memories
-                            WHERE {where_clause}
-                            ORDER BY created_at DESC
-                            LIMIT 20
+                        # 没有查询文本，只用过滤条件
+                        sql = """
+                        SELECT id, content, ai_understanding, amount, occurred_at
+                        FROM memories
+                        WHERE user_id = $1
                         """
+                        params = [uuid.UUID(user_id)]
+                        
+                        if filters:
+                            if 'date_from' in filters:
+                                sql += f" AND occurred_at >= ${len(params) + 1}"
+                                params.append(datetime.fromisoformat(filters['date_from']))
+                            if 'date_to' in filters:
+                                sql += f" AND occurred_at <= ${len(params) + 1}"
+                                params.append(datetime.fromisoformat(filters['date_to']))
+                            if 'min_amount' in filters:
+                                sql += f" AND amount >= ${len(params) + 1}"
+                                params.append(filters['min_amount'])
+                            if 'max_amount' in filters:
+                                sql += f" AND amount <= ${len(params) + 1}"
+                                params.append(filters['max_amount'])
+                        
+                        sql += " ORDER BY occurred_at DESC LIMIT 20"
+                        
+                        rows = await conn.fetch(sql, *params)
                     
-                    result = await session.execute(text(sql), params)
-                    rows = result.fetchall()
-                    
-                    return [
-                        {
-                            'id': str(row.id),
-                            'content': row.content,
-                            'ai_understanding': row.ai_understanding,
-                            'amount': float(row.amount) if row.amount else None,
-                            'occurred_at': row.occurred_at.isoformat() if row.occurred_at else None,
-                            'created_at': row.created_at.isoformat()
+                    # 格式化结果
+                    for row in rows:
+                        result = {
+                            "id": str(row['id']),
+                            "content": row['content'],
+                            "ai_understanding": json.loads(row['ai_understanding']),
+                            "amount": float(row['amount']) if row['amount'] else None,
+                            "occurred_at": row['occurred_at'].isoformat() if row['occurred_at'] else None
                         }
-                        for row in rows
-                    ]
-                except Exception as e:
-                    logger.error(f"Search error: {e}")
-                    return []
+                        if 'similarity' in row:
+                            result['similarity'] = float(row['similarity'])
+                        results.append(result)
+                    
+                    return results
+                    
+            except Exception as e:
+                return [{
+                    "error": str(e)
+                }]
         
         @self.server.tool()
-        async def aggregate(user_id: str, operation: str, field: str = "amount", filters: Optional[Dict] = None) -> Dict[str, Any]:
-            """聚合计算 - 用于精确统计"""
-            async with AsyncSession(self.engine) as session:
-                try:
-                    # 构建条件
-                    conditions = ["user_id = :user_id"]
-                    params = {'user_id': user_id}
+        async def aggregate(
+            user_id: str,
+            operation: str,  # sum, count, avg, min, max
+            field: str,      # amount 或其他数值字段
+            filters: Optional[Dict[str, Any]] = None
+        ) -> Dict[str, Any]:
+            """对数据进行聚合统计"""
+            try:
+                async with self.pool.acquire() as conn:
+                    # 构建聚合查询
+                    if operation not in ['sum', 'count', 'avg', 'min', 'max']:
+                        return {"error": f"不支持的操作: {operation}"}
                     
+                    if operation == 'count':
+                        sql = f"SELECT COUNT(*) as result FROM memories WHERE user_id = $1"
+                    else:
+                        sql = f"SELECT {operation.upper()}({field}) as result FROM memories WHERE user_id = $1"
+                    
+                    params = [uuid.UUID(user_id)]
+                    
+                    # 添加过滤条件
                     if filters:
                         if 'date_from' in filters:
-                            conditions.append("occurred_at >= :date_from")
-                            params['date_from'] = filters['date_from']
+                            sql += f" AND occurred_at >= ${len(params) + 1}"
+                            params.append(datetime.fromisoformat(filters['date_from']))
                         if 'date_to' in filters:
-                            conditions.append("occurred_at <= :date_to")
-                            params['date_to'] = filters['date_to']
-                        if 'ai_filter' in filters:
-                            # AI可以传递JSONB查询条件
-                            for key, value in filters['ai_filter'].items():
-                                conditions.append(f"ai_understanding->>{key!r} = :{key}")
-                                params[key] = value
+                            sql += f" AND occurred_at <= ${len(params) + 1}"
+                            params.append(datetime.fromisoformat(filters['date_to']))
                     
-                    where_clause = " AND ".join(conditions)
+                    # 对于非 count 操作，确保字段不为空
+                    if operation != 'count':
+                        sql += f" AND {field} IS NOT NULL"
                     
-                    # 执行聚合操作
-                    if operation == "sum":
-                        sql = f"SELECT SUM({field}) as result FROM memories WHERE {where_clause}"
-                    elif operation == "count":
-                        sql = f"SELECT COUNT(*) as result FROM memories WHERE {where_clause}"
-                    elif operation == "avg":
-                        sql = f"SELECT AVG({field}) as result FROM memories WHERE {where_clause}"
-                    elif operation == "max":
-                        sql = f"SELECT MAX({field}) as result FROM memories WHERE {where_clause}"
-                    elif operation == "min":
-                        sql = f"SELECT MIN({field}) as result FROM memories WHERE {where_clause}"
-                    else:
-                        return {"error": f"Unknown operation: {operation}"}
-                    
-                    result = await session.execute(text(sql), params)
-                    value = result.scalar()
+                    result = await conn.fetchval(sql, *params)
                     
                     return {
                         "operation": operation,
                         "field": field,
-                        "result": float(value) if value else 0,
+                        "result": float(result) if result else 0,
                         "filters": filters
                     }
-                except Exception as e:
-                    logger.error(f"Aggregate error: {e}")
-                    return {"error": str(e)}
+                    
+            except Exception as e:
+                return {
+                    "error": str(e)
+                }
         
         @self.server.tool()
-        async def schedule_reminder(memory_id: str, remind_at: str) -> Dict[str, Any]:
-            """设置提醒 - 基于已存储的记忆"""
-            async with AsyncSession(self.engine) as session:
-                try:
-                    remind_time = datetime.fromisoformat(remind_at)
-                    
-                    result = await session.execute(
-                        text("""
-                            INSERT INTO reminders (memory_id, remind_at)
-                            VALUES (:memory_id, :remind_at)
-                            RETURNING id
-                        """),
-                        {
-                            'memory_id': memory_id,
-                            'remind_at': remind_time
-                        }
+        async def schedule_reminder(
+            memory_id: str,
+            remind_at: str  # ISO 格式时间
+        ) -> Dict[str, Any]:
+            """为某个记忆设置提醒"""
+            try:
+                async with self.pool.acquire() as conn:
+                    reminder_id = await conn.fetchval(
+                        """
+                        INSERT INTO reminders (id, memory_id, remind_at)
+                        VALUES ($1, $2, $3)
+                        RETURNING id
+                        """,
+                        uuid.uuid4(),
+                        uuid.UUID(memory_id),
+                        datetime.fromisoformat(remind_at)
                     )
                     
-                    reminder_id = result.scalar()
-                    await session.commit()
+                    return {
+                        "success": True,
+                        "reminder_id": str(reminder_id),
+                        "remind_at": remind_at
+                    }
                     
-                    return {"success": True, "reminder_id": str(reminder_id)}
-                except Exception as e:
-                    logger.error(f"Schedule reminder error: {e}")
-                    return {"success": False, "error": str(e)}
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": str(e)
+                }
         
         @self.server.tool()
-        async def get_pending_reminders(user_id: str) -> List[Dict]:
+        async def get_pending_reminders(
+            user_id: str
+        ) -> List[Dict[str, Any]]:
             """获取待发送的提醒"""
-            async with AsyncSession(self.engine) as session:
-                try:
-                    sql = """
-                        SELECT r.id, r.remind_at, m.content, m.ai_understanding
+            try:
+                async with self.pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        """
+                        SELECT r.id as reminder_id, r.remind_at, 
+                               m.content, m.ai_understanding
                         FROM reminders r
                         JOIN memories m ON r.memory_id = m.id
-                        WHERE m.user_id = :user_id 
-                          AND r.sent IS NULL 
-                          AND r.remind_at <= :now
+                        WHERE m.user_id = $1 
+                          AND r.sent_at IS NULL
+                          AND r.remind_at <= NOW()
                         ORDER BY r.remind_at
-                    """
-                    
-                    result = await session.execute(
-                        text(sql),
-                        {'user_id': user_id, 'now': datetime.now()}
+                        """,
+                        uuid.UUID(user_id)
                     )
-                    
-                    rows = result.fetchall()
                     
                     return [
                         {
-                            'reminder_id': str(row.id),
-                            'remind_at': row.remind_at.isoformat(),
-                            'content': row.content,
-                            'ai_understanding': row.ai_understanding
+                            "reminder_id": str(row['reminder_id']),
+                            "remind_at": row['remind_at'].isoformat(),
+                            "content": row['content'],
+                            "ai_understanding": json.loads(row['ai_understanding'])
                         }
                         for row in rows
                     ]
-                except Exception as e:
-                    logger.error(f"Get reminders error: {e}")
-                    return []
+                    
+            except Exception as e:
+                return [{
+                    "error": str(e)
+                }]
         
         @self.server.tool()
-        async def mark_reminder_sent(reminder_id: str) -> Dict[str, Any]:
-            """标记提醒已发送"""
-            async with AsyncSession(self.engine) as session:
-                try:
-                    await session.execute(
-                        text("UPDATE reminders SET sent = :now WHERE id = :id"),
-                        {'id': reminder_id, 'now': datetime.now()}
+        async def mark_reminder_sent(
+            reminder_id: str
+        ) -> Dict[str, Any]:
+            """标记提醒为已发送"""
+            try:
+                async with self.pool.acquire() as conn:
+                    await conn.execute(
+                        """
+                        UPDATE reminders 
+                        SET sent_at = NOW()
+                        WHERE id = $1
+                        """,
+                        uuid.UUID(reminder_id)
                     )
-                    await session.commit()
-                    return {"success": True}
-                except Exception as e:
-                    logger.error(f"Mark reminder error: {e}")
-                    return {"success": False, "error": str(e)}
-    
-    async def _generate_embedding(self, text: str) -> List[float]:
-        """生成文本embedding"""
-        try:
-            response = await self.openai_client.embeddings.create(
-                model="text-embedding-3-small",
-                input=text
-            )
-            return response.data[0].embedding
-        except Exception as e:
-            logger.error(f"Embedding generation error: {e}")
-            # 返回零向量作为后备
-            return [0.0] * 1536
+                    
+                    return {
+                        "success": True,
+                        "reminder_id": reminder_id
+                    }
+                    
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": str(e)
+                }
     
     async def run(self):
-        """运行MCP服务器"""
-        async with stdio_server() as (read, write):
-            await self.server.run(read, write)
+        """运行 MCP 服务器"""
+        await self.initialize()
+        try:
+            async with stdio_server() as (read, write):
+                await self.server.run(read, write)
+        finally:
+            await self.close()
 
 
 if __name__ == "__main__":

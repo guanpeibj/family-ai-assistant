@@ -20,8 +20,10 @@ class Settings(BaseSettings):
     DATABASE_URL: PostgresDsn
     
     # Threema配置
-    THREEMA_ID: str
-    THREEMA_SECRET: str
+    THREEMA_GATEWAY_ID: str = Field(description="Threema Gateway ID (starts with *)")
+    THREEMA_SECRET: str = Field(description="Threema Gateway Secret")
+    THREEMA_PRIVATE_KEY: str = Field(default="", description="Threema private key (hex encoded)")
+    THREEMA_WEBHOOK_URL: str = Field(default="", description="Public URL for Threema webhook")
     
     # OpenAI配置
     OPENAI_API_KEY: str

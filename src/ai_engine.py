@@ -23,19 +23,24 @@ class AIEngine:
         # TODO: 实际的MCP客户端连接
         logger.info("MCP client initialized")
     
-    async def process_message(self, content: str, user_id: str) -> str:
+    async def process_message(self, content: str, user_id: str, context: Dict[str, Any] = None) -> str:
         """
         处理用户消息 - 完全由AI驱动
+        
+        Args:
+            content: 消息内容（已解密的文本）
+            user_id: 用户ID
+            context: 消息上下文（channel、sender_id等，让AI理解）
         """
         try:
             # 第一步：理解用户意图和提取信息
-            understanding = await self._understand_message(content, user_id)
+            understanding = await self._understand_message(content, user_id, context)
             
             # 第二步：执行必要的操作
             result = await self._execute_actions(understanding, user_id)
             
             # 第三步：生成回复
-            response = await self._generate_response(content, understanding, result)
+            response = await self._generate_response(content, understanding, result, context)
             
             return response
             
@@ -43,14 +48,24 @@ class AIEngine:
             logger.error(f"Error processing message: {e}")
             return "抱歉，处理您的消息时出现了错误。"
     
-    async def _understand_message(self, content: str, user_id: str) -> Dict[str, Any]:
+    async def _understand_message(self, content: str, user_id: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         AI理解消息内容
         """
+        # 构建上下文信息
+        context_info = ""
+        if context:
+            context_info = f"\n消息来源：{context.get('channel', '未知')}"
+            if context.get('sender_id'):
+                context_info += f"\n发送者ID：{context['sender_id']}"
+            if context.get('nickname'):
+                context_info += f"\n发送者昵称：{context['nickname']}"
+        
         prompt = f"""
         分析用户消息并提取所有相关信息。
         
         用户消息：{content}
+        {context_info}
         
         请分析并返回JSON格式的理解结果，包括但不限于：
         1. intent: 用户意图（record_expense/record_income/record_health/query/set_reminder/general_chat等）
@@ -75,6 +90,7 @@ class AIEngine:
         - repeat: 重复模式（如果有）
         
         请提取所有你认为重要的信息，不要局限于上述字段。
+        如果消息来自特定渠道（如Threema、邮件），请考虑该渠道的特点。
         """
         
         response = await self.openai_client.chat.completions.create(
@@ -190,10 +206,21 @@ class AIEngine:
         
         return result
     
-    async def _generate_response(self, original_message: str, understanding: Dict[str, Any], execution_result: Dict[str, Any]) -> str:
+    async def _generate_response(self, original_message: str, understanding: Dict[str, Any], execution_result: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         """
         生成自然语言回复
         """
+        # 构建渠道特定的提示
+        channel_hint = ""
+        if context and context.get('channel'):
+            channel = context['channel']
+            if channel == 'threema':
+                channel_hint = "\n注意：回复通过Threema发送，保持简洁，避免过长的消息。"
+            elif channel == 'email':
+                channel_hint = "\n注意：回复通过邮件发送，可以更详细，可以使用格式化。"
+            elif channel == 'wechat':
+                channel_hint = "\n注意：回复通过微信发送，考虑使用表情符号增加亲和力。"
+        
         prompt = f"""
         基于用户消息和执行结果，生成一个友好、有用的回复。
         
@@ -210,6 +237,7 @@ class AIEngine:
         4. 如果是查询，简洁地展示结果
         5. 如果设置了提醒，确认提醒时间
         6. 保持友好、简洁的语气
+        {channel_hint}
         """
         
         response = await self.openai_client.chat.completions.create(
@@ -241,15 +269,21 @@ class AIEngine:
         else:
             return {"success": True}
     
-    async def check_and_send_reminders(self) -> List[Dict[str, Any]]:
+    async def check_and_send_reminders(self, send_callback) -> List[Dict[str, Any]]:
         """
         检查并发送到期的提醒
+        
+        Args:
+            send_callback: 发送消息的回调函数 async (user_id, content) -> bool
         """
         sent_reminders = []
         
         try:
             # 获取所有用户
-            for user_id in settings.ALLOWED_USERS:
+            # TODO: 从数据库获取所有用户，而不是从配置
+            user_ids = settings.ALLOWED_USERS if hasattr(settings, 'ALLOWED_USERS') else []
+            
+            for user_id in user_ids:
                 # 获取待发送提醒
                 reminders = await self._call_mcp_tool(
                     'get_pending_reminders',
@@ -257,20 +291,26 @@ class AIEngine:
                 )
                 
                 for reminder in reminders:
-                    # 发送提醒（需要集成Threema）
-                    # TODO: 实际发送
-                    logger.info(f"Sending reminder to {user_id}: {reminder['content']}")
+                    # 构建提醒消息
+                    reminder_text = f"⏰ 提醒：{reminder.get('content', '您设置的提醒时间到了')}"
                     
-                    # 标记为已发送
-                    await self._call_mcp_tool(
-                        'mark_reminder_sent',
-                        reminder_id=reminder['reminder_id']
-                    )
+                    # 调用回调发送消息
+                    success = await send_callback(user_id, reminder_text)
                     
-                    sent_reminders.append({
-                        'user_id': user_id,
-                        'reminder': reminder
-                    })
+                    if success:
+                        # 标记为已发送
+                        await self._call_mcp_tool(
+                            'mark_reminder_sent',
+                            reminder_id=reminder['reminder_id']
+                        )
+                        
+                        sent_reminders.append({
+                            'user_id': user_id,
+                            'reminder': reminder,
+                            'sent': True
+                        })
+                    else:
+                        logger.error(f"Failed to send reminder {reminder['reminder_id']} to {user_id}")
         
         except Exception as e:
             logger.error(f"Error checking reminders: {e}")

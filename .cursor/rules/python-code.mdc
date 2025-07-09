@@ -1,0 +1,88 @@
+---
+globs: *.py
+---
+# Python 代码开发规则
+
+## 编码风格
+- 使用 Python 3.12.11 的最新特性
+- 遵循 PEP 8 编码规范
+- 使用类型注解（typing）
+- 异步优先：尽可能使用 async/await
+
+## AI 驱动开发原则
+
+### 1. 让 AI 决定逻辑
+```python
+# ❌ 错误：预设业务逻辑
+if category == "食品":
+    budget_limit = 3000
+elif category == "交通":
+    budget_limit = 1000
+
+# ✅ 正确：让 AI 决定
+understanding = await ai.understand_message(content)
+actions = await ai.decide_actions(understanding)
+```
+
+### 2. 通用化设计
+```python
+# ❌ 错误：特定功能
+async def record_expense(amount: float, category: str):
+    # 预设的费用记录逻辑
+
+# ✅ 正确：通用存储
+async def store_memory(content: str, ai_data: dict, user_id: str):
+    # AI 决定存储什么和如何存储
+```
+
+### 3. 简化错误处理
+```python
+# 使用简单直接的错误处理
+try:
+    result = await some_operation()
+except Exception as e:
+    logger.error(f"操作失败: {e}")
+    # 让 AI 决定如何向用户解释错误
+    return await ai.explain_error(e, context)
+```
+
+## FastAPI 最佳实践
+
+### 1. 路由设计
+```python
+# 极简路由，不预设业务逻辑
+@app.post("/message")
+async def process_message(content: str, user_id: str):
+    # 所有逻辑交给 AI Engine
+    return await ai_engine.process(content, user_id)
+```
+
+### 2. 依赖注入
+```python
+# 使用 FastAPI 的依赖注入
+async def get_ai_engine() -> AIEngine:
+    return ai_engine
+
+@app.post("/message")
+async def process_message(
+    content: str,
+    user_id: str,
+    engine: AIEngine = Depends(get_ai_engine)
+):
+    return await engine.process(content, user_id)
+```
+
+## 日志和监控
+- 使用结构化日志（JSON 格式）
+- 记录 AI 的决策过程
+- 关键操作都要有日志
+
+## 测试原则
+- 不测试 AI 的决策（因为是动态的）
+- 只测试基础设施和工具功能
+- 使用 pytest 和 pytest-asyncio
+
+## 文件引用
+- AI 引擎实现：[ai_engine.py](mdc:src/ai_engine.py)
+- API 入口：[main.py](mdc:src/api/main.py)
+- 配置管理：[config.py](mdc:src/core/config.py)

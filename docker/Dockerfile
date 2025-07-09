@@ -9,9 +9,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装Python依赖
-COPY pyproject.toml .
-RUN pip install --no-cache-dir uv && \
-    uv pip install --system .
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制代码
 COPY . .

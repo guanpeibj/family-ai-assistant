@@ -1,0 +1,128 @@
+---
+globs: mcp-server/*.py,*mcp*.py
+---
+# MCP 工具开发规则
+
+## 核心原则：完全泛化的工具设计
+
+### 1. 工具设计理念
+```python
+# ❌ 错误：业务特定的工具
+@server.tool()
+async def record_expense(amount: float, category: str, description: str):
+    # 预设的费用记录逻辑
+    
+# ✅ 正确：泛化的存储工具
+@server.tool()
+async def store(content: str, ai_data: dict, user_id: str):
+    # AI 决定存储什么和如何存储
+```
+
+### 2. MCP 工具集（仅需要这些）
+```python
+# 1. 通用存储
+@server.tool()
+async def store(
+    content: str,           # 原始内容
+    ai_data: dict,         # AI 理解的所有信息
+    user_id: str           # 用户标识
+) -> dict:
+    """存储任何 AI 认为需要记住的信息"""
+
+# 2. 语义搜索 + 精确过滤
+@server.tool()
+async def search(
+    query: str,            # 搜索查询
+    user_id: str,          # 用户标识
+    filters: dict = None   # 可选的精确过滤条件
+) -> list[dict]:
+    """搜索相关记忆，支持语义和精确查询"""
+
+# 3. 通用聚合
+@server.tool() 
+async def aggregate(
+    user_id: str,
+    operation: str,        # sum, count, avg, min, max
+    field: str,           # 要聚合的字段
+    filters: dict = None  # 可选的过滤条件
+) -> dict:
+    """对数据进行聚合统计"""
+
+# 4. 提醒管理
+@server.tool()
+async def schedule_reminder(
+    memory_id: str,
+    remind_at: str        # ISO 格式时间
+) -> dict:
+    """为某个记忆设置提醒"""
+```
+
+### 3. 工具实现要点
+- 不包含任何业务逻辑判断
+- 参数设计要通用和灵活
+- 返回完整的原始数据，让 AI 决定如何使用
+- 错误处理简单直接，返回清晰的错误信息
+
+### 4. MCP Server 结构
+```python
+# generic_mcp_server.py
+from mcp.server import Server
+from mcp.server.models import InitializationOptions
+
+server = Server("family-assistant")
+
+@server.list_tools()
+async def handle_list_tools():
+    # 返回所有可用工具
+    
+@server.call_tool()
+async def handle_call_tool(name: str, arguments: dict):
+    # 分发到具体工具函数
+    
+async def main():
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            InitializationOptions(server_name="family-assistant")
+        )
+```
+
+### 5. 数据库交互
+```python
+# 使用连接池
+async def get_db_connection():
+    return await asyncpg.connect(DATABASE_URL)
+
+# 工具内部使用
+async with get_db_connection() as conn:
+    result = await conn.fetch(query, *params)
+```
+
+## 测试 MCP 工具
+```python
+# 使用 MCP 客户端测试
+from mcp import ClientSession
+
+async def test_store_tool():
+    async with ClientSession() as session:
+        result = await session.call_tool(
+            "store",
+            {
+                "content": "今天买菜花了50元",
+                "ai_data": {"amount": 50, "category": "买菜"},
+                "user_id": "test_user"
+            }
+        )
+        assert result["success"]
+```
+
+## 注意事项
+- MCP 工具应该是无状态的
+- 每个工具调用应该是原子操作
+- 工具之间不应该有依赖关系
+- 保持工具接口稳定，避免频繁变更
+
+## 文件引用
+- 通用 MCP 服务器：[generic_mcp_server.py](mdc:mcp-server/generic_mcp_server.py)
+- 家庭助手 MCP 服务器：[family_mcp_server.py](mdc:mcp-server/family_mcp_server.py)

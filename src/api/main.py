@@ -9,6 +9,7 @@ from ..core.config import settings
 from ..core.logging import get_logger
 from ..db.database import init_db, close_db
 from ..ai_engine import AIEngine
+from .threema_webhook import router as threema_router, send_to_threema_user
 
 logger = get_logger(__name__)
 
@@ -26,7 +27,8 @@ async def reminder_task():
     """简单的提醒检查任务"""
     while True:
         try:
-            await ai_engine.check_and_send_reminders()
+            # 使用 Threema 作为默认提醒渠道
+            await ai_engine.check_and_send_reminders(send_to_threema_user)
         except Exception as e:
             logger.error(f"Reminder task error: {e}")
         # 每分钟检查一次
@@ -85,6 +87,9 @@ if settings.DEBUG:
         allow_headers=["*"],
     )
 
+# 注册路由
+app.include_router(threema_router)
+
 
 @app.get("/health")
 async def health_check():
@@ -98,15 +103,12 @@ async def health_check():
 
 @app.post("/message")
 async def handle_message(request: MessageRequest):
-    """处理消息 - 核心端点"""
-    # 验证用户
-    if request.user_id not in settings.ALLOWED_USERS:
-        raise HTTPException(status_code=403, detail="Unauthorized user")
-    
-    # 处理消息
+    """处理消息 - 核心端点（用于测试或直接API调用）"""
+    # 处理消息 - 通过 API 调用的消息没有特定渠道
     response = await ai_engine.process_message(
         content=request.content,
-        user_id=request.user_id
+        user_id=request.user_id,
+        context={"channel": "api"}
     )
     
     return {

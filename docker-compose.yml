@@ -4,16 +4,17 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: faa_user
-      POSTGRES_PASSWORD: faa_password
-      POSTGRES_DB: faa_db
+      POSTGRES_USER: faa
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-faa_password}
+      POSTGRES_DB: family_assistant
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./scripts/add_user_tables.sql:/docker-entrypoint-initdb.d/02-users.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U faa_user -d faa_db"]
+      test: ["CMD-SHELL", "pg_isready -U faa -d family_assistant"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -25,14 +26,22 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_URL=postgresql://faa:${DB_PASSWORD:-faa_password}@postgres:5432/family_assistant
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - THREEMA_ID=${THREEMA_ID}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4-turbo-preview}
+      - THREEMA_GATEWAY_ID=${THREEMA_GATEWAY_ID}
       - THREEMA_SECRET=${THREEMA_SECRET}
-      - ALLOWED_USERS=${ALLOWED_USERS}
+      - THREEMA_PRIVATE_KEY=${THREEMA_PRIVATE_KEY}
+      - THREEMA_WEBHOOK_URL=${THREEMA_WEBHOOK_URL}
+      - APP_ENV=${APP_ENV:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SECRET_KEY=${SECRET_KEY}
+      - MCP_SERVER_URL=http://faa-mcp:8000
     depends_on:
       postgres:
         condition: service_healthy
+      faa-mcp:
+        condition: service_started
     volumes:
       - ./src:/app/src
     command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
@@ -42,12 +51,13 @@ services:
       context: ./mcp-server
       dockerfile: Dockerfile
     environment:
-      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_URL=postgresql://faa:${DB_PASSWORD:-faa_password}@postgres:5432/family_assistant
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - MCP_TRANSPORT=stdio
     depends_on:
       postgres:
         condition: service_healthy
+    ports:
+      - "9000:8000"  # MCP 服务端口
     volumes:
       - ./mcp-server:/app
     command: python generic_mcp_server.py

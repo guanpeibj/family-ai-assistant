@@ -1,0 +1,58 @@
+---
+alwaysApply: true
+---
+# FAA (Family AI Assistant) 项目核心理念
+
+## 项目定位
+FAA 是一个家庭 AI 助手，专为解决家庭日常需求而设计：
+- 智能记录和管理家庭财务、健康信息、日常杂事
+- 通过 Threema、邮件等多渠道与用户交互
+- AI 驱动、极简设计、实用至上
+- 即使工程代码保持不变，系统的智能和能力也应该随着 AI 模型的进步和数据的积累而自动提升
+
+## 核心架构原则
+
+### 1. 极简三层架构
+```
+用户 → Threema/邮件 → FastAPI → AI Engine → MCP Tools → PostgreSQL
+                                      ↓
+                                 OpenAI API
+```
+
+### 2. AI 驱动决策
+- **让 AI 决定一切**：消息理解、数据存储、查询方式都由 AI 决定
+- **零预设逻辑**：不固定分类、不固定字段、不固定流程
+- **动态适应**：通过调整 prompt 即可扩展功能
+
+### 3. 数据模型设计
+- 使用通用的 `memories` 表存储所有信息
+- `ai_understanding` JSONB 字段让 AI 自由存储理解的内容
+- 保留精确查询字段（amount, occurred_at）用于统计分析
+- 混合存储：语义向量 + 结构化数据
+
+### 4. MCP 工具设计
+- 工具完全泛化，不包含业务逻辑
+- 只提供基础能力：store, search, aggregate, schedule_reminder
+- 业务逻辑完全由 AI 在运行时决定
+
+## 开发原则
+1. **简单直接**：代码清晰易懂，避免过度设计
+2. **快速实现**：功能优先，先跑通再优化
+3. **易于扩展**：为未来功能留足空间
+4. **专注实用**：解决实际问题，不追求技术炫技
+5. **自我进化**：工程相对固定，但随着 AI 智能提升和数据积累，系统能力自动增长
+
+## 技术栈
+- Python 3.12.11 + FastAPI
+- PostgreSQL + pgvector
+- MCP 1.10.1 (Model Context Protocol)
+- OpenAI API
+- Docker + Docker Compose
+- DevContainer 开发环境
+
+## 文件引用
+- ai驱动：[ai-evolution.mdc](mdc:ai-evolution.mdc)
+- 项目构想：[readme.MD](mdc:readme.MD)
+- 第一版总结：[edition1.MD](mdc:edition1.MD)
+- 架构文档：[ARCHITECTURE.md](mdc:ARCHITECTURE.md)
+- 部署文档：[DEPLOY.md](mdc:DEPLOY.md)
