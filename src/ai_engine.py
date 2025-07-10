@@ -10,6 +10,7 @@ import httpx
 import os
 
 from .core.config import settings
+from .core.prompt_manager import prompt_manager
 
 logger = structlog.get_logger(__name__)
 
@@ -101,10 +102,40 @@ class AIEngine:
             logger.error(f"Error processing message: {e}")
             return "抱歉，处理您的消息时出现了错误。"
     
+    async def _get_recent_memories(self, user_id: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """获取用户最近的交互记录，用于上下文理解"""
+        try:
+            # 获取最近的记忆
+            recent_memories = await self._call_mcp_tool(
+                'search',
+                query='',  # 空查询获取最新记录
+                user_id=user_id,
+                filters={'limit': limit}
+            )
+            
+            # 格式化记忆，提取关键信息
+            formatted_memories = []
+            for memory in recent_memories:
+                if isinstance(memory, dict):
+                    formatted_memories.append({
+                        'content': memory.get('content', ''),
+                        'ai_understanding': memory.get('ai_understanding', {}),
+                        'time': memory.get('occurred_at', '')
+                    })
+            
+            return formatted_memories
+            
+        except Exception as e:
+            logger.error(f"Error getting recent memories: {e}")
+            return []
+    
     async def _understand_message(self, content: str, user_id: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        AI理解消息内容 - 增强版
+        AI理解消息内容 - 增强版，包含历史上下文和信息完整性检查
         """
+        # 获取历史上下文
+        recent_memories = await self._get_recent_memories(user_id, limit=5)
+        
         # 构建上下文信息
         context_info = ""
         if context:
@@ -114,22 +145,47 @@ class AIEngine:
             if context.get('nickname'):
                 context_info += f"\n发送者昵称：{context['nickname']}"
         
+        # 构建历史上下文
+        history_context = ""
+        if recent_memories:
+            history_context = "\n\n最近的交互历史（用于理解上下文）："
+            for idx, memory in enumerate(recent_memories, 1):
+                history_context += f"\n{idx}. {memory['time']}: {memory['content']}"
+                if memory['ai_understanding'].get('intent'):
+                    history_context += f" (意图: {memory['ai_understanding']['intent']})"
+        
         # 获取当前时间用于时间理解
         current_time = datetime.now()
         
+        # 使用prompt管理器获取理解指导
+        understanding_guide = prompt_manager.get_understanding_prompt()
+        
         prompt = f"""
-        分析用户消息并提取所有相关信息。
+        分析用户消息并提取所有相关信息，特别注意信息完整性检查。
         
         当前时间：{current_time.isoformat()}
         用户消息：{content}
         {context_info}
+        {history_context}
+        
+        {understanding_guide if understanding_guide else ''}
         
         请分析并返回JSON格式的理解结果，包括但不限于：
-        1. intent: 用户意图（record_expense/record_income/record_health/query/set_reminder/update_info/general_chat等）
+        1. intent: 用户意图（record_expense/record_income/record_health/query/set_reminder/update_info/general_chat/clarification_response等）
         2. entities: 提取的实体信息
-        3. need_action: 是否需要执行动作
-        4. suggested_actions: 建议的动作列表
-        5. original_content: 原始消息内容（用于存储）
+        3. need_action: 是否需要执行动作（如果信息不完整，应该为false）
+        4. need_clarification: 是否需要询问更多信息（最重要！）
+        5. missing_fields: 缺少的关键信息字段列表
+        6. clarification_questions: 具体的询问问题列表
+        7. suggested_actions: 建议的动作列表
+        8. original_content: 原始消息内容（用于存储）
+        9. context_related: 是否与历史上下文相关
+        
+        **信息完整性检查规则**：
+        - 记账必需：金额、用途、受益人（如涉及孩子）
+        - 提醒必需：内容、时间、对象（如涉及孩子）
+        - 健康记录必需：家庭成员、指标、数值
+        - 信息更新必需：更新目标、新信息
         
         时间理解规则：
         - "今天" = {current_time.date()}
@@ -142,8 +198,9 @@ class AIEngine:
         财务相关提取：
         - amount: 金额（数字）
         - type: expense（支出）/income（收入）
-        - category: 自动分类（餐饮/购物/交通/医疗/教育/日用品/娱乐/其他）
+        - category: 自动分类（餐饮/购物/交通/医疗/教育/育儿用品/日用品/娱乐/其他）
         - description: 具体描述
+        - person: 如果涉及特定家庭成员
         
         健康相关提取：
         - person: 家庭成员（儿子/大女儿/二女儿/妻子/我）
@@ -157,8 +214,14 @@ class AIEngine:
         - repeat: 重复模式（daily/weekly/monthly/once）
         
         信息更新识别：
-        - 如果包含"改为"、"更新"、"现在是"等词汇，设置 update_existing: true
+        - 如果包含"改为"、"改成"、"现在是"、"更新为"等词汇，设置 update_existing: true
         - 提取要更新的信息类型和新值
+        
+        基于历史上下文的理解：
+        - 如果消息中提到"刚才"、"上面"、"之前"等，要关联历史记录
+        - 识别是否是对之前记录的补充或修正
+        
+        如果用户只是回答了之前的询问，识别为 clarification_response 意图。
         
         请提取所有你认为重要的信息，occurred_at字段必须是具体的ISO格式时间。
         """
@@ -166,7 +229,7 @@ class AIEngine:
         response = await self.openai_client.chat.completions.create(
             model=settings.OPENAI_MODEL,
             messages=[
-                {"role": "system", "content": FAMILY_AI_SYSTEM_PROMPT},
+                {"role": "system", "content": prompt_manager.get_system_prompt()},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
@@ -181,10 +244,16 @@ class AIEngine:
     
     async def _execute_actions(self, understanding: Dict[str, Any], user_id: str) -> Dict[str, Any]:
         """
-        根据理解结果执行动作 - 增强版，自动进行相关统计
+        根据理解结果执行动作 - 增强版，支持信息完整性检查
         """
         result = {"actions_taken": []}
         
+        # 🚨 重要：如果需要澄清信息，不执行任何操作
+        if understanding.get('need_clarification'):
+            logger.info("Information incomplete, skipping actions until clarification")
+            return result
+        
+        # 只有信息完整时才执行操作
         if not understanding.get('need_action'):
             return result
         
@@ -403,7 +472,85 @@ class AIEngine:
     
     async def _generate_response(self, original_message: str, understanding: Dict[str, Any], execution_result: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         """
-        生成自然语言回复 - 增强版，提供统计和建议
+        生成自然语言回复 - 增强版，优先处理信息完整性检查
+        """
+        # 🎯 优先级1：处理信息不完整的情况
+        if understanding.get('need_clarification'):
+            return await self._generate_clarification_response(original_message, understanding, context)
+        
+        # 🎯 优先级2：处理正常的完整信息回复
+        return await self._generate_normal_response(original_message, understanding, execution_result, context)
+    
+    async def _generate_clarification_response(self, original_message: str, understanding: Dict[str, Any], context: Dict[str, Any] = None) -> str:
+        """
+        生成澄清询问的回复
+        """
+        missing_fields = understanding.get('missing_fields', [])
+        clarification_questions = understanding.get('clarification_questions', [])
+        
+        # 构建渠道特定的提示
+        channel_hint = ""
+        if context and context.get('channel') == 'threema':
+            channel_hint = "\n注意：通过Threema回复，保持简洁友好。"
+        
+        # 获取回复生成指导
+        response_guide = prompt_manager.get_response_prompt()
+        
+        # 构建系统提示
+        system_prompt = prompt_manager.get_system_prompt() + f"""
+
+当前任务：用户提供的信息不完整，需要询问缺少的信息。
+
+{response_guide if response_guide else ''}
+
+询问要求：
+1. 确认已理解的部分信息
+2. 礼貌地询问缺少的信息
+3. 提供选择选项（如适用）
+4. 使用温和、专业的语气
+5. 一次只询问一个最重要的问题
+{channel_hint}
+
+缺少的信息：{', '.join(missing_fields)}
+建议的询问：{', '.join(clarification_questions)}
+"""
+        
+        # 准备详细的上下文信息
+        detailed_context = {
+            "用户消息": original_message,
+            "理解结果": understanding,
+            "缺少信息": missing_fields,
+            "建议询问": clarification_questions
+        }
+        
+        prompt = f"""
+用户提供的信息不完整，需要询问缺少的信息。
+
+{json.dumps(detailed_context, ensure_ascii=False, indent=2)}
+
+请生成一个温和、专业的询问回复，遵循以下格式：
+1. 确认已理解部分："好的，我理解您要..."
+2. 礼貌询问："请问您..."
+3. 提供选择（如适用）："是...还是...？"
+
+记住要像家人一样温暖，但又保持专业的精确度。
+"""
+        
+        response = await self.openai_client.chat.completions.create(
+            model=settings.OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.5,
+            max_tokens=200
+        )
+        
+        return response.choices[0].message.content
+    
+    async def _generate_normal_response(self, original_message: str, understanding: Dict[str, Any], execution_result: Dict[str, Any], context: Dict[str, Any] = None) -> str:
+        """
+        生成正常的回复（信息完整时）
         """
         # 构建执行结果的详细描述
         actions_summary = []
@@ -428,10 +575,15 @@ class AIEngine:
         if context and context.get('channel') == 'threema':
             channel_hint = "\n注意：通过Threema回复，保持简洁友好，使用表情符号增加亲和力。"
         
+        # 获取回复生成指导
+        response_guide = prompt_manager.get_response_prompt()
+        
         # 构建系统提示
-        system_prompt = FAMILY_AI_SYSTEM_PROMPT + f"""
+        system_prompt = prompt_manager.get_system_prompt() + f"""
 
 当前任务：基于用户消息和执行结果，生成一个有价值的回复。
+
+{response_guide if response_guide else ''}
 
 回复要求：
 1. 确认已完成的操作（{', '.join(actions_summary) if actions_summary else '无操作'}）
@@ -483,10 +635,7 @@ class AIEngine:
 - 确认提醒的具体时间
 - 如果是重复提醒，说明频率
 
-回复示例风格：
-- "已经帮您记下了！今天买菜花了58元，本月买菜已支出523元，比上月同期增加了20%。💡小建议：可以考虑多买些应季蔬菜，既新鲜又实惠。"
-- "记录成功！儿子现在身高90cm，比上个月长高了2cm，成长曲线很棒！📈 下次体检时间是下个月15号。"
-- "好的，我会在明天上午9点提醒您给二女儿打疫苗。已添加到提醒列表中。"
+记住要像家人一样温暖，给出实用的建议。
 """
         
         response = await self.openai_client.chat.completions.create(

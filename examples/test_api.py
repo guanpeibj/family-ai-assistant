@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FAA API 测试脚本
+阿福(FAA) API 测试脚本
 测试各种功能场景
 """
 import asyncio
@@ -176,7 +176,7 @@ async def test_info_updates():
 
 async def main():
     """运行所有测试"""
-    print("=== FAA API 测试 ===\n")
+    print("=== 阿福(FAA) API 测试 ===\n")
     
     tests = [
         ("健康检查", test_health),

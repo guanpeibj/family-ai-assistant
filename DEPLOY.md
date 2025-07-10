@@ -1,269 +1,309 @@
-# 部署指南
+# FAA 部署指南
 
-## 本地开发
+## 🚀 快速开始（5分钟部署）
 
-### 使用 DevContainer（推荐）
+### 一键部署脚本
+```bash
+# 在你的服务器上执行
+curl -fsSL https://raw.githubusercontent.com/yourusername/family-ai-assistant/main/scripts/quick-deploy.sh | bash
+```
 
-1. 安装 Docker Desktop
-2. 用 Cursor 打开项目
-3. 选择"在容器中重新打开"
-4. 开发环境自动配置完成
+### 或者手动部署
+```bash
+# 1. 克隆项目
+git clone https://github.com/yourusername/family-ai-assistant.git
+cd family-ai-assistant
 
-### 开发命令
+# 2. 复制配置
+cp env.example .env
+nano .env  # 编辑必要配置
+
+# 3. 启动服务
+docker-compose up -d
+```
+
+## 📋 详细部署步骤
+
+### 1. 服务器准备
+
+#### 最低配置要求
+- CPU: 1核
+- 内存: 2GB
+- 存储: 20GB
+- 系统: Ubuntu 20.04+
+
+#### 推荐配置（稳定运行）
+- CPU: 2核
+- 内存: 4GB
+- 存储: 40GB
+- 系统: Ubuntu 22.04 LTS
+
+#### 安装必要软件
+```bash
+# 更新系统
+sudo apt update && sudo apt upgrade -y
+
+# 安装 Docker
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+
+# 安装 Docker Compose
+sudo apt install docker-compose -y
+
+# 重新登录以应用 docker 组权限
+logout
+```
+
+### 2. 项目部署
 
 ```bash
+# 克隆项目
+git clone https://github.com/yourusername/family-ai-assistant.git
+cd family-ai-assistant
+
+# 配置环境变量
+cp env.example .env
+nano .env
+```
+
+#### 必需的环境变量
+```env
+# OpenAI 配置（必需）
+OPENAI_API_KEY=sk-xxx
+
+# 数据库密码（请修改）
+POSTGRES_PASSWORD=your_strong_password_here
+
+# 应用密钥（请生成随机字符串）
+SECRET_KEY=your_random_secret_key_here
+
+# Threema 配置（可选，如需接收消息）
+THREEMA_GATEWAY_ID=*XXXXXXX
+THREEMA_API_SECRET=your_threema_secret
+```
+
+#### 启动服务
+```bash
+# 构建并启动所有服务
+docker-compose up -d
+
 # 查看服务状态
 docker-compose ps
 
 # 查看日志
 docker-compose logs -f
-
-# 运行测试
-python examples/test_api.py
-
-# 初始化家庭数据
-python scripts/init_family_data.py
-
-# 访问数据库
-psql -U faa -d family_assistant -h postgres
 ```
 
-## 生产部署
+### 3. 配置域名和HTTPS（推荐）
 
-### 方式一：快速部署
+#### 方案一：使用 Cloudflare（免费）
+1. 注册 [Cloudflare](https://cloudflare.com) 账号
+2. 添加你的域名
+3. 修改域名 DNS 服务器为 Cloudflare 提供的
+4. 添加 A 记录指向服务器 IP
+5. 开启 SSL/TLS（Flexible 模式）
+6. 开启 Always Use HTTPS
 
-#### 1. 服务器准备
-
+#### 方案二：使用 Nginx + Let's Encrypt
 ```bash
-# 安装 Docker 和 Docker Compose
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER
+# 安装 Nginx
+sudo apt install nginx certbot python3-certbot-nginx -y
 
-# 克隆项目
-git clone https://github.com/guanpeibj/family-ai-assistant.git
-cd family-ai-assistant
+# 配置 Nginx
+sudo nano /etc/nginx/sites-available/faa
 ```
 
-#### 2. 配置环境
-
-```bash
-# 复制并编辑配置
-cp env.example .env
-vim .env
-```
-
-**必需配置**：
-```bash
-# OpenAI（必需）
-OPENAI_API_KEY=sk-xxx
-
-# 数据库（生产环境请使用强密码）
-DB_PASSWORD=your_very_strong_password
-
-# 安全（生产环境必需）
-SECRET_KEY=generate_a_long_random_string
-
-# Threema（如需接收消息）
-THREEMA_GATEWAY_ID=*XXXXXXX
-THREEMA_SECRET=your_secret
-THREEMA_WEBHOOK_URL=https://your-domain.com/webhook/threema
-```
-
-#### 3. 启动服务
-
-```bash
-# 构建并启动
-docker-compose build
-docker-compose up -d
-
-# 检查服务状态
-docker-compose ps
-
-# 查看启动日志
-docker-compose logs -f
-```
-
-#### 4. 初始化数据（可选）
-
-```bash
-# 初始化家庭基本信息
-cd scripts
-python init_family_data.py
-
-# 记录生成的用户ID
-```
-
-### 方式二：GitHub Actions 自动部署
-
-#### 1. 配置 GitHub Secrets
-
-在仓库设置中添加：
-
-- `DEPLOY_HOST`: 服务器IP或域名
-- `DEPLOY_USER`: SSH用户名
-- `DEPLOY_SSH_KEY`: SSH私钥
-- `DB_PASSWORD`: 数据库密码
-- `OPENAI_API_KEY`: OpenAI密钥
-- `THREEMA_GATEWAY_ID`: Threema ID
-- `THREEMA_SECRET`: Threema密钥
-- `SECRET_KEY`: 应用密钥
-
-#### 2. 自动部署
-
-推送到 `main` 分支自动触发部署
-
-## Threema 配置（可选）
-
-### 1. 配置反向代理
-
+配置文件内容：
 ```nginx
 server {
-    listen 443 ssl;
+    listen 80;
     server_name your-domain.com;
-    
-    ssl_certificate /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-    
-    location /webhook/threema {
+
+    location / {
         proxy_pass http://localhost:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-    }
-    
-    location /api/ {
-        proxy_pass http://localhost:8000/;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 ```
 
-### 2. 设置 Webhook
+```bash
+# 启用站点
+sudo ln -s /etc/nginx/sites-available/faa /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
 
-1. 登录 Threema Gateway
-2. 设置 Webhook URL：`https://your-domain.com/webhook/threema`
-3. 保存设置
-
-详细步骤见 [DEPLOY_THREEMA.md](DEPLOY_THREEMA.md)
-
-## 服务架构
-
-```yaml
-services:
-  postgres       # 数据库 + pgvector
-  faa-api        # 主服务（FastAPI + AI Engine）
-  faa-mcp        # MCP HTTP 服务器
+# 获取 SSL 证书
+sudo certbot --nginx -d your-domain.com
 ```
 
-### 端口说明
-- `8000`: API 服务
-- `5432`: PostgreSQL（仅内部）
-- `9000`: MCP HTTP 服务（仅内部）
+### 4. 配置 Threema（可选）
 
-## 日常维护
+在 Threema Gateway 管理面板设置：
+- Webhook URL: `https://your-domain.com/webhook/threema`
+- 选择接收所有消息类型
+
+测试 Webhook：
+```bash
+curl -X POST https://your-domain.com/webhook/threema \
+  -H "Content-Type: application/json" \
+  -d '{"from":"ECHOECHO","text":"测试消息"}'
+```
+
+### 5. 初始化数据
+
+```bash
+# 运行数据初始化脚本
+docker-compose exec faa-api python scripts/init_family_data.py
+
+# 记录输出的用户ID，用于后续使用
+```
+
+## 🔧 日常运维
 
 ### 查看日志
 ```bash
-# 所有服务
+# 所有服务日志
 docker-compose logs -f
 
-# 特定服务
+# 特定服务日志
 docker-compose logs -f faa-api
-docker-compose logs -f faa-mcp
+docker-compose logs -f postgres
 ```
 
 ### 备份数据
 ```bash
-# 备份数据库
-docker-compose exec postgres pg_dump -U faa family_assistant > backup_$(date +%Y%m%d).sql
+# 备份脚本
+cat > backup.sh << 'EOF'
+#!/bin/bash
+DATE=$(date +%Y%m%d_%H%M%S)
+docker-compose exec -T postgres pg_dump -U faa family_assistant > backup_${DATE}.sql
+echo "备份完成: backup_${DATE}.sql"
+EOF
 
-# 备份配置
-cp .env .env.backup
+chmod +x backup.sh
+
+# 设置定时备份
+crontab -e
+# 添加: 0 2 * * * /path/to/backup.sh
 ```
 
 ### 更新服务
 ```bash
+# 拉取最新代码
 git pull
+
+# 重建并重启服务
 docker-compose build
 docker-compose up -d
+
+# 清理旧镜像
+docker image prune -f
 ```
 
-### 监控健康状态
+### 监控服务
 ```bash
-# API健康检查
+# 健康检查
 curl http://localhost:8000/health
 
-# MCP健康检查
-curl http://localhost:9000/health
+# 查看资源使用
+docker stats
+
+# 查看磁盘空间
+df -h
 ```
 
-## 性能优化
-
-### 1. 数据库优化
-- pgvector 索引已自动创建
-- 定期执行 `VACUUM ANALYZE`
-
-### 2. 容器资源限制
-```yaml
-# docker-compose.yml
-services:
-  faa-api:
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-```
-
-### 3. 日志管理
-```yaml
-# 限制日志大小
-logging:
-  driver: json-file
-  options:
-    max-size: "10m"
-    max-file: "3"
-```
-
-## 故障排查
+## 🐛 故障排查
 
 ### 服务无法启动
 ```bash
 # 检查端口占用
-sudo netstat -tulpn | grep -E '8000|5432|9000'
+sudo lsof -i :8000
+sudo lsof -i :5432
 
 # 查看详细错误
-docker-compose logs --tail=50
+docker-compose logs --tail=100
+
+# 重置服务
+docker-compose down -v  # 注意：会删除数据
+docker-compose up -d
 ```
 
-### AI响应缓慢
-- 检查 OpenAI API 状态
-- 确认网络连接正常
-- 查看 API 日志中的响应时间
+### 数据库连接失败
+```bash
+# 检查数据库服务
+docker-compose ps postgres
 
-### MCP连接问题
-- 确认 MCP 服务运行：`docker-compose ps faa-mcp`
-- 检查内部网络：`docker network ls`
-- 查看 MCP 日志：`docker-compose logs faa-mcp`
+# 测试连接
+docker-compose exec postgres psql -U faa -d family_assistant
 
-## 安全建议
+# 重置数据库密码
+docker-compose exec postgres psql -U postgres -c "ALTER USER faa PASSWORD 'new_password';"
+```
 
-1. **生产环境必需**
-   - 使用强密码
-   - 配置 HTTPS
-   - 限制端口访问
-   - 定期更新系统
+### AI 响应问题
+- 检查 OpenAI API Key 是否正确
+- 确认 API 余额充足
+- 查看 API 错误日志：`docker-compose logs faa-api | grep -i error`
 
-2. **数据安全**
-   - 定期备份
-   - 加密存储敏感信息
-   - 监控异常访问
+## 💰 成本优化
 
-3. **API安全**
-   - 限制请求频率
-   - 验证用户身份
-   - 记录访问日志
+### 服务器选择
+- **开发测试**：任何 2GB 内存的 VPS（$5-10/月）
+- **生产使用**：4GB 内存 VPS（$20-40/月）
+- **推荐提供商**：Hetzner、DigitalOcean、Vultr
 
-## 成本控制
+### API 成本控制
+- 使用 GPT-4-turbo 而非 GPT-4
+- 实现对话历史限制
+- 添加用户配额管理
 
-- **OpenAI API**：使用 GPT-4-turbo 约 $0.01/1K tokens
-- **服务器**：最低 2GB 内存即可运行
-- **存储**：数据库增长缓慢，100GB 足够长期使用 
+## 🔐 安全建议
+
+### 必做项
+1. 修改所有默认密码
+2. 配置防火墙只开放必要端口
+3. 启用 HTTPS
+4. 定期更新系统和 Docker
+
+### 防火墙配置
+```bash
+# 使用 ufw
+sudo ufw allow 22/tcp    # SSH
+sudo ufw allow 80/tcp    # HTTP
+sudo ufw allow 443/tcp   # HTTPS
+sudo ufw enable
+```
+
+## 📞 快速支持
+
+### 健康检查失败？
+```bash
+# 运行诊断脚本
+docker-compose exec faa-api python scripts/check_deployment.py
+```
+
+### 需要重置？
+```bash
+# 完全重置（注意：会删除所有数据）
+docker-compose down -v
+rm -rf postgres_data
+docker-compose up -d
+```
+
+### GitHub Actions 自动部署
+
+1. 在 GitHub 仓库设置 Secrets：
+   - `DEPLOY_HOST`: 服务器IP
+   - `DEPLOY_USER`: SSH用户
+   - `DEPLOY_SSH_KEY`: SSH私钥
+   - `OPENAI_API_KEY`: OpenAI密钥
+   - 其他必要的环境变量
+
+2. 推送到 main 分支自动部署
+
+---
+
+**需要帮助？** 查看 [常见问题](https://github.com/yourusername/family-ai-assistant/wiki) 或提交 [Issue](https://github.com/yourusername/family-ai-assistant/issues) 

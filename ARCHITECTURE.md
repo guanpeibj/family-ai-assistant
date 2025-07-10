@@ -1,99 +1,212 @@
-# Family AI Assistant - 架构设计
+# FAA 架构设计
 
-## 核心理念
-
-**"AI驱动、尽量减少工程预设、实在有用"**
-
-## 架构概览
+## 系统架构图
 
 ```
-用户 → Threema/Email/WeChat → FastAPI → AI Engine → MCP(HTTP) → Database
-                                          ↓
-                                    OpenAI API
+┌─────────────────┐     ┌─────────────────┐
+│   Threema App   │     │  Email Client   │
+└────────┬────────┘     └────────┬────────┘
+         │                       │
+         ▼                       ▼
+┌─────────────────────────────────────────┐
+│            FastAPI (Port 8000)          │
+│  ┌──────────────┐  ┌────────────────┐  │
+│  │   Webhook    │  │  Message API    │  │
+│  └──────┬───────┘  └───────┬────────┘  │
+│         │                  │            │
+│         ▼                  ▼            │
+│     ┌────────────────────────────┐     │
+│     │      AI Engine (增强版)     │     │
+│     │  • Prompt Manager          │     │
+│     │  • Context Awareness       │     │
+│     │  • Emotion Support         │     │
+│     └────────────┬───────────────┘     │
+└──────────────────┼─────────────────────┘
+                   │
+                   ▼
+        ┌─────────────────────┐
+        │  MCP HTTP Wrapper   │
+        │    (Port 9000)      │
+        └──────────┬──────────┘
+                   │
+                   ▼
+        ┌─────────────────────┐
+        │   Generic MCP Tools │
+        │ • store             │
+        │ • search            │
+        │ • aggregate         │
+        │ • schedule_reminder │
+        └──────────┬──────────┘
+                   │
+                   ▼
+        ┌─────────────────────┐
+        │    PostgreSQL       │
+        │   with pgvector     │
+        └─────────────────────┘
 ```
 
-## 关键设计决策
+## 核心组件
 
-### 1. 极简数据模型
-- **用户管理**：`users` 和 `user_channels` 表支持多渠道
-- **核心存储**：`memories` 表存储所有信息
-- **提醒系统**：`reminders` 表关联记忆
-- **AI理解**：`ai_understanding` JSONB字段让AI自由存储
+### 1. AI Engine (增强版)
+- **Prompt Manager**: 动态加载和管理不同版本的提示词
+- **历史上下文感知**: 获取最近5条交互记录辅助理解
+- **情感支持系统**: 识别用户情绪并给予温暖回应
+- **智能分类器**: 自动识别育儿、教育、医疗等特殊类别
 
-### 2. AI驱动的处理流程
-1. **接收**：通过Webhook接收消息（Threema已实现）
-2. **理解**：AI深度分析消息，智能提取信息
-3. **执行**：根据理解调用MCP工具，自动进行相关统计
-4. **回复**：AI生成个性化、有价值的响应
-
-### 3. 增强的AI能力
-- **定制化System Prompt**：专为3孩家庭优化
-- **智能时间理解**：自动转换自然语言时间表达
-- **自动分类**：支出类别自动识别
-- **统计分析**：记录后立即提供相关统计
-- **异常检测**：发现异常模式时主动提醒
-
-### 4. 泛化的MCP工具（HTTP接口）
-```
-POST /tool/store              # 存储任何信息
-POST /tool/search             # 语义搜索 + 精确过滤
-POST /tool/aggregate          # 灵活的聚合统计
-POST /tool/schedule_reminder  # 设置提醒
-POST /tool/get_pending_reminders  # 获取待发送提醒
-POST /tool/mark_reminder_sent # 标记已发送
+### 2. Prompt 管理系统
+```yaml
+# prompts/family_assistant_prompts.yaml
+version: "2.0"
+current: "v2_enhanced"
+prompts:
+  v2_enhanced:
+    system: 详细的家庭场景指导
+    understanding: 消息理解增强规则
+    response_generation: 回复生成优化策略
 ```
 
-### 5. 多渠道支持架构
-- **Threema**：E2E加密，已完整实现
-- **Email**：预留接口，易于添加
-- **WeChat**：预留接口，相同模式
+### 3. MCP 工具层（完全通用）
+- **零业务逻辑**: 所有业务理解由AI完成
+- **通用接口**: store/search/aggregate等基础能力
+- **HTTP包装器**: 支持容器化部署
 
-## 技术栈
+### 4. 数据模型
+```sql
+-- 通用记忆表
+CREATE TABLE memories (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL,
+    content TEXT NOT NULL,
+    ai_understanding JSONB,  -- AI自由决定存什么
+    embedding vector(1536),  -- 语义向量
+    amount DECIMAL,          -- 精确金额(可选)
+    occurred_at TIMESTAMP    -- 精确时间(可选)
+);
+```
 
-- **Python 3.12 + FastAPI**: Web框架
-- **PostgreSQL + pgvector**: 数据存储和向量搜索
-- **OpenAI API**: AI能力（GPT-4-turbo）
-- **MCP HTTP包装器**: 工具服务化
-- **PyNaCl**: Threema加密
-- **Docker Compose**: 容器编排
+## AI 驱动的核心流程
 
-## 设计亮点
+### 1. 消息理解流程
+```python
+async def understand_message(content, user_id):
+    # 1. 获取历史上下文
+    recent_memories = get_recent_memories(user_id, limit=5)
+    
+    # 2. 加载当前prompt版本
+    system_prompt = prompt_manager.get_system_prompt()
+    understanding_guide = prompt_manager.get_understanding_prompt()
+    
+    # 3. AI理解（包含上下文）
+    understanding = await ai.analyze(
+        content, 
+        context=recent_memories,
+        guide=understanding_guide
+    )
+    
+    return understanding
+```
 
-### 1. AI自我进化能力
+### 2. 智能回复生成
+```python
+async def generate_response(understanding, results):
+    # 使用增强的回复指导
+    response_guide = prompt_manager.get_response_prompt()
+    
+    # 生成温暖、有用的回复
+    response = await ai.generate(
+        understanding=understanding,
+        results=results,
+        guide=response_guide,
+        style="warm_and_helpful"
+    )
+    
+    return response
+```
+
+## 自我进化机制
+
+### 1. Prompt 版本迭代
+- 通过YAML配置文件管理prompt版本
+- 支持A/B测试不同的prompt策略
+- 无需修改代码即可优化AI行为
+
+### 2. 数据积累增强
+- 每次交互都在丰富AI的理解
+- 历史数据帮助更准确的个性化
+- JSONB字段支持存储任意新信息
+
+### 3. 模型升级透明
+- 更换OpenAI模型只需修改配置
+- 自动获得新模型的能力提升
 - 工程代码保持稳定
-- 能力随AI模型升级自动提升
-- 通过数据积累越用越智能
-- 只需调整Prompt即可获得新功能
 
-### 2. 零业务逻辑硬编码
-- 没有预设的分类系统
-- 没有固定的数据格式
-- 没有限制的使用场景
-- AI决定一切
+## 部署架构
 
-### 3. 容器化友好
-- MCP通过HTTP提供服务
-- 各服务独立运行
-- 易于水平扩展
-- 简化部署流程
+### Docker Compose 服务
+```yaml
+services:
+  faa-api:      # FastAPI主服务
+  faa-mcp:      # MCP HTTP包装器
+  postgres:     # 数据库
+```
+
+### 环境隔离
+- 开发环境：DevContainer
+- 测试环境：docker-compose
+- 生产环境：云服务器 + Docker
 
 ## 安全设计
 
-- **端到端加密**：Threema消息全程加密
-- **用户隔离**：每个用户的数据完全独立
-- **最小权限**：工具只能访问用户自己的数据
-- **环境变量管理**：敏感信息分离
+### 1. 数据隔离
+- 用户数据通过user_id严格隔离
+- MCP工具自动过滤用户数据
 
-## 扩展性
+### 2. 加密通信
+- Threema端到端加密
+- API使用HTTPS（生产环境）
 
-1. **新渠道**：实现适配器接口即可
-2. **新功能**：调整AI prompt，无需改代码
-3. **新工具**：添加MCP工具定义
-4. **性能扩展**：服务可独立扩展
+### 3. 敏感信息
+- OpenAI API Key环境变量
+- 数据库密码环境变量
 
-## 为什么这样设计？
+## 扩展性设计
 
-- **简单**：3层架构，易理解易维护
-- **灵活**：AI决定一切，适应性强
-- **实用**：专注核心功能，快速交付
-- **进化**：随AI技术进步自动获得新能力 
+### 1. 新渠道接入
+- 实现新的webhook endpoint
+- 复用现有AI Engine
+
+### 2. 新功能添加
+- 更新prompt即可支持新场景
+- 无需修改核心代码
+
+### 3. 多语言支持
+- 通过prompt版本实现
+- AI自动适应语言
+
+## 性能优化
+
+### 1. 向量搜索
+- pgvector索引加速语义搜索
+- 相似度计算在数据库层完成
+
+### 2. 连接池
+- asyncpg连接池管理
+- 避免频繁建立连接
+
+### 3. 异步处理
+- 全异步架构
+- 支持并发请求
+
+## 监控与日志
+
+### 1. 结构化日志
+- structlog JSON格式
+- 便于日志分析
+
+### 2. 健康检查
+- /health endpoint
+- Docker健康检查
+
+### 3. 错误追踪
+- 详细的错误上下文
+- AI决策过程可追溯 

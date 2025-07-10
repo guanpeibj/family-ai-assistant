@@ -1,4 +1,4 @@
-name: Deploy to Server
+name: Deploy FAA
 
 on:
   push:
@@ -6,91 +6,51 @@ on:
   workflow_dispatch:  # 允许手动触发
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  PROJECT_PATH: /opt/family-ai-assistant
 
 jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Log in to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=branch
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest,enable={{is_default_branch}}
-    
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./docker/Dockerfile
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-
   deploy:
-    needs: build-and-push
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Deploy to server
+    - name: 部署到服务器
       uses: appleboy/ssh-action@v1.0.0
       with:
         host: ${{ secrets.DEPLOY_HOST }}
         username: ${{ secrets.DEPLOY_USER }}
         key: ${{ secrets.DEPLOY_SSH_KEY }}
-        port: ${{ secrets.DEPLOY_PORT }}
+        port: ${{ secrets.DEPLOY_PORT || '22' }}
         script: |
-          cd ~/family-ai-assistant
+          # 进入项目目录
+          cd ${{ env.PROJECT_PATH }}
           
           # 拉取最新代码
-          git pull origin main
+          echo "📥 拉取最新代码..."
+          git pull origin main || git pull origin master
           
           # 更新环境变量
-          echo "更新环境变量..."
-          cat > .env << EOF
-          DATABASE_URL=${{ secrets.DATABASE_URL }}
+          echo "⚙️  更新配置..."
+          cat > .env << 'EOF'
+          # 数据库配置
+          POSTGRES_USER=faa
+          POSTGRES_PASSWORD=${{ secrets.DB_PASSWORD }}
+          POSTGRES_DB=family_assistant
+          
+          # OpenAI
           OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
-          THREEMA_ID=${{ secrets.THREEMA_ID }}
-          THREEMA_SECRET=${{ secrets.THREEMA_SECRET }}
-          ALLOWED_USERS=${{ secrets.ALLOWED_USERS }}
+          
+          # Threema (可选)
+          THREEMA_GATEWAY_ID=${{ secrets.THREEMA_GATEWAY_ID }}
+          THREEMA_API_SECRET=${{ secrets.THREEMA_API_SECRET }}
+          
+          # 应用配置
           SECRET_KEY=${{ secrets.SECRET_KEY }}
           APP_ENV=production
           LOG_LEVEL=INFO
           EOF
           
-          # 拉取最新镜像并重启服务
-          echo "拉取最新镜像..."
-          docker-compose pull
+          # 部署服务
+          echo "🚀 部署服务..."
+          ./scripts/deploy.sh deploy
           
-          echo "重启服务..."
-          docker-compose down
-          docker-compose up -d
-          
-          # 清理旧镜像
-          docker image prune -f
-          
-          echo "部署完成！" 
+          echo "✅ 部署完成！" 

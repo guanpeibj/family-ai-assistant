@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     )
     
     # 应用设置
-    APP_NAME: str = "Family AI Assistant"
+    APP_NAME: str = "阿福 (Family AI Assistant)"
     APP_ENV: str = Field(default="development", pattern="^(development|production|test)$")
     DEBUG: bool = Field(default=True)
     

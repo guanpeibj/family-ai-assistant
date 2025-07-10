@@ -39,7 +39,7 @@ async def reminder_task():
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时
-    logger.info("Starting Family AI Assistant", 
+    logger.info("Starting 阿福 (Family AI Assistant)", 
                 app_name=settings.APP_NAME,
                 environment=settings.APP_ENV)
     
@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI):
     yield
     
     # 关闭时
-    logger.info("Shutting down Family AI Assistant")
+    logger.info("Shutting down 阿福 (Family AI Assistant)")
     
     # 取消后台任务
     reminder_task_handle.cancel()
@@ -124,7 +124,7 @@ async def handle_message(request: MessageRequest):
 async def root():
     """根路径"""
     return {
-        "message": "Welcome to Family AI Assistant",
+        "message": "Welcome to 阿福 (Family AI Assistant)",
         "version": "0.1.0",
         "endpoints": {
             "health": "/health",

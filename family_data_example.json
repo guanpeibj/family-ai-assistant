@@ -1,0 +1,132 @@
+{
+    "username": "family_default",
+    "threema_id": "YOUR_THREEMA_ID",
+    "family_members": [
+        {
+            "content": "家庭成员：爸爸（老公），名字叫张伟，1985年出生，身高175cm，家庭的带领者，是家里的技术担当，开发了阿福这个AI助手。喜欢编程、读书。血型O型。",
+            "ai_understanding": {
+                "intent": "record_info",
+                "type": "family_member",
+                "person": "爸爸",
+                "name": "张伟",
+                "role": "父亲/丈夫",
+                "birth_year": 1985,
+                "height": 175,
+                "blood_type": "O",
+                "hobbies": [
+                    "编程",
+                    "读书"
+                ],
+                "description": "技术担当，阿福开发者"
+            }
+        },
+        {
+            "content": "家庭成员：妈妈（妻子），名字叫李芳，1987年出生，身高163cm，管理家庭具体事务，全职在家照顾3个孩子。喜欢烘焙、手工。血型A型。",
+            "ai_understanding": {
+                "intent": "record_info",
+                "type": "family_member",
+                "person": "妈妈",
+                "name": "李芳",
+                "role": "母亲/妻子",
+                "birth_year": 1987,
+                "height": 163,
+                "blood_type": "A",
+                "hobbies": [
+                    "烘焙",
+                    "手工"
+                ],
+                "description": "家庭核心，全职照顾3个孩子"
+            }
+        },
+        {
+            "content": "家庭成员：儿子，小名叫小宝，2023年出生，目前1岁多，正在学走路阶段。",
+            "ai_understanding": {
+                "intent": "record_info",
+                "type": "family_member",
+                "person": "儿子",
+                "nickname": "小宝",
+                "role": "最小的孩子",
+                "birth_year": 2023,
+                "age_stage": "学步期",
+                "description": "正在学走路"
+            }
+        },
+        {
+            "content": "家庭成员：大女儿，2018年出生，在上小学。",
+            "ai_understanding": {
+                "intent": "record_info",
+                "type": "family_member",
+                "person": "大女儿",
+                "role": "长女",
+                "birth_year": 2018,
+                "status": "上学",
+                "description": "在读小学"
+            }
+        },
+        {
+            "content": "家庭成员：二女儿，2020年出生，在上幼儿园。",
+            "ai_understanding": {
+                "intent": "record_info",
+                "type": "family_member",
+                "person": "二女儿",
+                "role": "次女",
+                "birth_year": 2020,
+                "status": "上幼儿园",
+                "description": "在读幼儿园"
+            }
+        }
+    ],
+    "important_info": [
+        {
+            "content": "家庭住址：某市某区某小区",
+            "ai_understanding": {
+                "intent": "record_info",
+                "type": "address",
+                "address": "某市某区某小区"
+            }
+        },
+        {
+            "content": "家庭预算：每月餐饮预算3000元，日用品预算1500元，教育支出预算2000元",
+            "ai_understanding": {
+                "intent": "record_info",
+                "type": "budget",
+                "monthly_budgets": {
+                    "餐饮": 3000,
+                    "日用品": 1500,
+                    "教育": 2000
+                }
+            }
+        }
+    ],
+    "contacts": [
+        {
+            "content": "班主任老师电话：138xxxx1234",
+            "ai_understanding": {
+                "intent": "record_info",
+                "type": "contact",
+                "contact": {
+                    "name": "班主任",
+                    "role": "老师",
+                    "phone": "138xxxx1234"
+                }
+            }
+        }
+    ],
+    "preferences": [
+        {
+            "content": "家庭作息：爸爸通常晚上11点睡觉，妈妈晚上10点睡觉。",
+            "ai_understanding": {
+                "intent": "record_info",
+                "type": "routine",
+                "sleep_schedule": {
+                    "爸爸": {
+                        "睡觉": "23:00"
+                    },
+                    "妈妈": {
+                        "睡觉": "22:00"
+                    }
+                }
+            }
+        }
+    ]
+}
