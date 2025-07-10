@@ -5,13 +5,13 @@
 ### 一键部署脚本
 ```bash
 # 在你的服务器上执行
-curl -fsSL https://raw.githubusercontent.com/yourusername/family-ai-assistant/main/scripts/quick-deploy.sh | bash
+curl -fsSL https://raw.githubusercontent.com/guanpeibj/family-ai-assistant/master/scripts/quick-deploy.sh | bash
 ```
 
 ### 或者手动部署
 ```bash
 # 1. 克隆项目
-git clone https://github.com/yourusername/family-ai-assistant.git
+git clone https://github.com/guanpeibj/family-ai-assistant.git
 cd family-ai-assistant
 
 # 2. 复制配置
