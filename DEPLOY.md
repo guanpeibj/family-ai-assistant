@@ -58,7 +58,7 @@ logout
 
 ```bash
 # 克隆项目
-git clone https://github.com/yourusername/family-ai-assistant.git
+git clone https://github.com/guanpeibj/family-ai-assistant.git
 cd family-ai-assistant
 
 # 配置环境变量

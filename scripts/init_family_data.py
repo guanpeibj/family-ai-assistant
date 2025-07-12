@@ -24,7 +24,17 @@ EXAMPLE_DATA_FILE = Path("family_data_example.json")
 
 
 def load_family_data():
-    """加载家庭数据，优先使用私有数据，否则使用示例数据"""
+    """加载家庭数据，优先从环境变量读取，然后从文件读取"""
+    # 首先尝试从环境变量读取（CI/CD部署时使用）
+    family_data_env = os.getenv('FAMILY_DATA_JSON')
+    if family_data_env:
+        try:
+            print("🔐 从环境变量加载家庭数据")
+            return json.loads(family_data_env)
+        except json.JSONDecodeError as e:
+            print(f"❌ 环境变量 FAMILY_DATA_JSON 格式不正确: {e}")
+    
+    # 然后尝试从私有文件读取（本地开发时使用）
     if PRIVATE_DATA_FILE.exists():
         print(f"📁 加载私有家庭数据: {PRIVATE_DATA_FILE}")
         with open(PRIVATE_DATA_FILE, 'r', encoding='utf-8') as f:

@@ -1,6 +1,6 @@
 #!/bin/bash
 # FAA 快速部署脚本
-# 使用: curl -fsSL https://raw.githubusercontent.com/yourusername/family-ai-assistant/main/scripts/quick-deploy.sh | bash
+# 使用: curl -fsSL https://raw.githubusercontent.com/guanpeibj/family-ai-assistant/master/scripts/quick-deploy.sh | bash
 
 set -e
 
@@ -33,7 +33,7 @@ if [ -d "family-ai-assistant" ]; then
     cd family-ai-assistant
     git pull
 else
-    git clone https://github.com/yourusername/family-ai-assistant.git
+    git clone https://github.com/guanpeibj/family-ai-assistant.git
     cd family-ai-assistant
 fi
 
@@ -93,7 +93,7 @@ echo "   - 查看日志: cd /opt/family-ai-assistant && docker-compose logs -f"
 echo "   - 查看状态: cd /opt/family-ai-assistant && docker-compose ps"
 echo "   - 重启服务: cd /opt/family-ai-assistant && docker-compose restart"
 echo ""
-echo "📚 详细文档: https://github.com/yourusername/family-ai-assistant/blob/main/DEPLOY.md"
+echo "📚 详细文档: https://github.com/guanpeibj/family-ai-assistant/blob/master/DEPLOY.md"
 echo ""
 echo -e "${YELLOW}⚠️  下一步建议:${NC}"
 echo "1. 配置域名和 HTTPS (参考 DEPLOY.md)"
