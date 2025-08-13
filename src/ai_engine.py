@@ -2,8 +2,11 @@
 AI驱动的核心引擎 - 让AI决定一切
 """
 import json
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timedelta
+import uuid
+import time
+from pydantic import BaseModel, Field, ValidationError
 import openai
 import structlog
 import httpx
@@ -11,8 +14,20 @@ import os
 
 from .core.config import settings
 from .core.prompt_manager import prompt_manager
+from .core.llm_client import LLMClient
+from .core.config import settings
+from .services.media_service import make_signed_url
 
 logger = structlog.get_logger(__name__)
+
+def _looks_like_uuid(value: Optional[str]) -> bool:
+    if not value or not isinstance(value, str):
+        return False
+    try:
+        uuid.UUID(value)
+        return True
+    except Exception:
+        return False
 
 # 家庭AI助手的系统提示词
 FAMILY_AI_SYSTEM_PROMPT = """
@@ -47,7 +62,8 @@ FAMILY_AI_SYSTEM_PROMPT = """
 
 class AIEngine:
     def __init__(self):
-        self.openai_client = openai.AsyncClient(api_key=settings.OPENAI_API_KEY)
+        # 统一 LLM 客户端（可按配置切换 OpenAI 兼容/Anthropic 等）
+        self.llm = LLMClient()
         self.mcp_client = None
         self.mcp_url = os.getenv('MCP_SERVER_URL', 'http://faa-mcp:8000')
         
@@ -86,31 +102,116 @@ class AIEngine:
             user_id: 用户ID
             context: 消息上下文（channel、sender_id等，让AI理解）
         """
+        # 贯穿式 trace_id
+        trace_id = str(uuid.uuid4())
+        thread_id = (context or {}).get('thread_id') if context else None
+        channel = (context or {}).get('channel') if context else None
+
+        logger.info(
+            "message.received",
+            trace_id=trace_id,
+            user_id=user_id,
+            thread_id=thread_id,
+            channel=channel,
+            content_preview=content[:200]
+        )
+
         try:
+            # 将附件的衍生文本纳入可检索/嵌入的语境（M1：先拼接文本，不做复杂权重）
+            attachments = (context or {}).get('attachments') if context else None
+            derived_texts: List[str] = []
+            if isinstance(attachments, list):
+                for att in attachments:
+                    if not isinstance(att, dict):
+                        continue
+                    # 预留字段名，后续可由预处理模块填充
+                    tx = att.get('transcription', {}).get('text') if isinstance(att.get('transcription'), dict) else None
+                    if not tx:
+                        tx = att.get('ocr_text')
+                    if not tx:
+                        tx = att.get('vision_summary')
+                    if tx:
+                        derived_texts.append(str(tx))
+            if derived_texts:
+                content = (content or '').strip()
+                extra = "\n\n[来自附件的文本]\n" + "\n".join(derived_texts)
+                content = (content + extra) if content else "\n".join(derived_texts)
             # 第一步：理解用户意图和提取信息
-            understanding = await self._understand_message(content, user_id, context)
+            understanding = await self._understand_message(content, user_id, context, trace_id=trace_id)
             
             # 第二步：执行必要的操作
-            result = await self._execute_actions(understanding, user_id)
+            result = await self._execute_actions(understanding, user_id, context=context, trace_id=trace_id)
             
             # 第三步：生成回复
             response = await self._generate_response(content, understanding, result, context)
+
+            # 存储对话回合（用户与助手各一条），用于连续对话与后续检索
+            try:
+                await self._store_chat_turns(
+                    user_id=user_id,
+                    thread_id=thread_id,
+                    trace_id=trace_id,
+                    user_message=content,
+                    assistant_message=response,
+                    understanding=understanding,
+                    context=context,
+                )
+            except Exception as e:
+                logger.error("store.chat_turns.failed", trace_id=trace_id, error=str(e))
+
+            # 触发会话摘要（异步短路，不阻塞主流程）
+            try:
+                await self._maybe_summarize_thread(user_id=user_id, thread_id=thread_id, trace_id=trace_id)
+            except Exception as e:
+                logger.warning("thread.summarize.skip", trace_id=trace_id, error=str(e))
+
+            # 落盘交互轨迹，便于排障
+            try:
+                await self._persist_interaction(
+                    trace_id=trace_id,
+                    user_id=user_id,
+                    thread_id=thread_id,
+                    channel=channel,
+                    message_id=(context or {}).get('message_id') if context else None,
+                    input_text=content,
+                    understanding=understanding,
+                    actions=result,
+                    response_text=response,
+                )
+            except Exception as e:
+                logger.error("interaction.persist.failed", trace_id=trace_id, error=str(e))
             
             return response
             
         except Exception as e:
-            logger.error(f"Error processing message: {e}")
+            logger.error("message.process.error", trace_id=trace_id, error=str(e))
             return "抱歉，处理您的消息时出现了错误。"
     
-    async def _get_recent_memories(self, user_id: str, limit: int = 5) -> List[Dict[str, Any]]:
-        """获取用户最近的交互记录，用于上下文理解"""
+    async def _get_recent_memories(self, user_id: str, limit: int = 5, thread_id: Optional[str] = None, *, shared_thread: bool = False, channel: Optional[str] = None) -> List[Dict[str, Any]]:
+        """获取用户最近的交互记录，用于上下文理解
+
+        Args:
+            user_id: 归属用户
+            limit: 返回数量上限
+            thread_id: 线程标识（用于连续上下文）
+            shared_thread: 是否按线程跨用户共享检索
+            channel: 渠道（如 threema/api），用于在共享线程下进一步限定
+        """
         try:
             # 获取最近的记忆
+            filters = {'limit': limit}
+            if thread_id:
+                filters['thread_id'] = thread_id
+                filters['type'] = 'chat_turn'
+                if shared_thread:
+                    filters['shared_thread'] = True
+                if channel:
+                    filters['channel'] = channel
             recent_memories = await self._call_mcp_tool(
                 'search',
                 query='',  # 空查询获取最新记录
                 user_id=user_id,
-                filters={'limit': limit}
+                filters=filters
             )
             
             # 格式化记忆，提取关键信息
@@ -129,12 +230,36 @@ class AIEngine:
             logger.error(f"Error getting recent memories: {e}")
             return []
     
-    async def _understand_message(self, content: str, user_id: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def _understand_message(self, content: str, user_id: str, context: Dict[str, Any] = None, *, trace_id: str) -> Dict[str, Any]:
         """
         AI理解消息内容 - 增强版，包含历史上下文和信息完整性检查
         """
-        # 获取历史上下文
-        recent_memories = await self._get_recent_memories(user_id, limit=5)
+        # 上下文构建：近期对话窗口 + 语义检索 + 摘要（改为分块配额与重排去重）
+        thread_id = (context or {}).get('thread_id') if context else None
+        channel = (context or {}).get('channel') if context else None
+        # 共享线程策略：当上下文指示 shared_thread/conversation_scope=shared 时启用
+        shared_thread = False
+        if context:
+            if context.get('shared_thread') is True:
+                shared_thread = True
+            if context.get('conversation_scope') == 'shared':
+                shared_thread = True
+        recent_memories = await self._get_recent_memories(
+            user_id,
+            limit=10,
+            thread_id=thread_id,
+            shared_thread=shared_thread,
+            channel=channel
+        )
+        semantic_related = await self._semantic_search(
+            user_id,
+            query=content,
+            top_k=5,
+            thread_id=thread_id,
+            shared_thread=shared_thread,
+            channel=channel
+        )
+        thread_summaries = await self._get_recent_thread_summaries(user_id, thread_id, limit=1, shared_thread=shared_thread, channel=channel)
         
         # 构建上下文信息
         context_info = ""
@@ -145,14 +270,81 @@ class AIEngine:
             if context.get('nickname'):
                 context_info += f"\n发送者昵称：{context['nickname']}"
         
-        # 构建历史上下文
-        history_context = ""
+        # 分块配额 + 重排去重
+        def normalize_key(m: Dict[str, Any]) -> str:
+            aiu = m.get('ai_understanding') or {}
+            intent = aiu.get('intent') if isinstance(aiu, dict) else None
+            when = m.get('time') or m.get('occurred_at') or ''
+            return f"{m.get('content','')}||{intent or ''}||{when}"
+
+        def fmt_with_budget(items: List[Dict[str, Any]], title: str, char_budget: int, start_index: int = 1, seen: Optional[set] = None) -> Tuple[str, int, int]:
+            seen_local = seen if seen is not None else set()
+            block_lines: List[str] = []
+            count_included = 0
+            for idx, m in enumerate(items, start_index):
+                key = normalize_key(m)
+                if key in seen_local:
+                    continue
+                seen_local.add(key)
+                content_line = m.get('content', '')
+                aiu = m.get('ai_understanding') if isinstance(m.get('ai_understanding'), dict) else {}
+                intent = aiu.get('intent') if isinstance(aiu, dict) else None
+                when = m.get('time') or m.get('occurred_at') or ''
+                line = f"\n{idx}. {when}: {content_line}"
+                if intent:
+                    line += f" (意图: {intent})"
+                # 预估添加后长度
+                projected = (0 if not block_lines else len(''.join(block_lines))) + len(line)
+                if projected > char_budget and count_included > 0:
+                    break
+                block_lines.append(line)
+                count_included += 1
+            if not block_lines:
+                return "", start_index, 0
+            header = f"\n\n{title}:"
+            text = header + ''.join(block_lines)
+            return text, start_index + count_included, count_included
+
+        # 预算：总 3500，按 摘要:600 / 最近:2100 / 语义:800 分配
+        budget_summary = 600
+        budget_recent = 2100
+        budget_semantic = 800
+        seen_keys: set = set()
+        running_index = 1
+        history_parts: List[str] = []
+
+        # 优先级：摘要 > 最近 > 语义
+        if thread_summaries:
+            text, running_index, _ = fmt_with_budget(thread_summaries, "会话摘要", budget_summary, running_index, seen_keys)
+            if text:
+                history_parts.append(text)
         if recent_memories:
-            history_context = "\n\n最近的交互历史（用于理解上下文）："
-            for idx, memory in enumerate(recent_memories, 1):
-                history_context += f"\n{idx}. {memory['time']}: {memory['content']}"
-                if memory['ai_understanding'].get('intent'):
-                    history_context += f" (意图: {memory['ai_understanding']['intent']})"
+            text, running_index, _ = fmt_with_budget(recent_memories, "最近的交互历史（用于理解上下文）", budget_recent, running_index, seen_keys)
+            if text:
+                history_parts.append(text)
+        if semantic_related:
+            text, running_index, _ = fmt_with_budget(semantic_related, "与当前问题语义相关的历史", budget_semantic, running_index, seen_keys)
+            if text:
+                history_parts.append(text)
+
+        history_context = ''.join(history_parts)
+        # 兜底再截断（极少数情况下三块之和仍可能略超出）
+        if len(history_context) > 3500:
+            history_context = history_context[:3500]
+
+        # 打印最终上下文信息到日志
+        try:
+            logger.info(
+                "llm.context.built",
+                trace_id=trace_id,
+                thread_id=thread_id,
+                channel=channel,
+                shared_thread=shared_thread,
+                context_length=len(history_context),
+                context_preview=history_context[:500]
+            )
+        except Exception:
+            pass
         
         # 获取当前时间用于时间理解
         current_time = datetime.now()
@@ -189,8 +381,8 @@ class AIEngine:
         
         时间理解规则：
         - "今天" = {current_time.date()}
-        - "昨天" = {(current_time - datetime.timedelta(days=1)).date()}
-        - "前天" = {(current_time - datetime.timedelta(days=2)).date()}
+        - "昨天" = {(current_time - timedelta(days=1)).date()}
+        - "前天" = {(current_time - timedelta(days=2)).date()}
         - "上周X" = 计算具体日期
         - "这个月" = {current_time.strftime('%Y-%m')}
         - "上个月" = 计算具体月份
@@ -226,249 +418,386 @@ class AIEngine:
         请提取所有你认为重要的信息，occurred_at字段必须是具体的ISO格式时间。
         """
         
-        response = await self.openai_client.chat.completions.create(
-            model=settings.OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": prompt_manager.get_system_prompt()},
-                {"role": "user", "content": prompt}
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.3
-        )
-        
-        understanding = json.loads(response.choices[0].message.content)
+        def _safe_json(text: str) -> Dict[str, Any]:
+            try:
+                return json.loads(text)
+            except Exception:
+                start = text.find("{")
+                end = text.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    try:
+                        return json.loads(text[start:end+1])
+                    except Exception:
+                        pass
+                return {}
+
+        try:
+            understanding = await self.llm.chat_json(
+                system_prompt=prompt_manager.get_system_prompt(),
+                user_prompt=prompt,
+                temperature=0.3,
+                max_tokens=1200,
+            )
+        except Exception as e:
+            # 某些兼容端点可能不支持 JSON 强约束，退化为文本并尝试解析
+            logger.warning(f"chat_json failed, fallback to text: {e}")
+            raw = await self.llm.chat_text(
+                system_prompt=prompt_manager.get_system_prompt(),
+                user_prompt=prompt,
+                temperature=0.3,
+                max_tokens=1200,
+            )
+            understanding = _safe_json(raw)
+        # 校验与补全理解结果
+        class UnderstandingModel(BaseModel):
+            intent: Optional[str] = None
+            entities: Dict[str, Any] = Field(default_factory=dict)
+            need_action: bool = False
+            need_clarification: bool = False
+            missing_fields: List[str] = Field(default_factory=list)
+            clarification_questions: List[str] = Field(default_factory=list)
+            suggested_actions: List[Dict[str, Any]] = Field(default_factory=list)
+            original_content: str = content
+            context_related: Optional[bool] = None
+
+        try:
+            parsed = UnderstandingModel(**understanding)
+            understanding = parsed.model_dump()
+        except ValidationError as ve:
+            logger.warning("llm.parse.validation_error", trace_id=trace_id, error=str(ve), raw=understanding)
+            # 容错：最少保证必须字段存在
+            understanding.setdefault('entities', {})
+            understanding.setdefault('need_action', False)
+            understanding.setdefault('need_clarification', False)
+            understanding.setdefault('missing_fields', [])
+            understanding.setdefault('clarification_questions', [])
+            understanding.setdefault('suggested_actions', [])
+
         understanding['original_content'] = content
-        logger.info(f"Message understanding: {understanding}")
+
+        logger.info(
+            "llm.understanding.response",
+            trace_id=trace_id,
+            intent=understanding.get('intent'),
+            need_action=understanding.get('need_action'),
+            need_clarification=understanding.get('need_clarification'),
+            entities=understanding.get('entities')
+        )
         
         return understanding
     
-    async def _execute_actions(self, understanding: Dict[str, Any], user_id: str) -> Dict[str, Any]:
+    async def _build_tool_plan(self, understanding: Dict[str, Any], user_id: str, *, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        由 LLM 产出工具计划（Tool Plan/DSL）。
+        返回格式示例：
+        {
+          "steps": [
+            {"tool": "store", "args": {"content": "...", "ai_data": {...}}},
+            {"tool": "aggregate", "args": {"operation": "sum", "field": "amount", "filters": {...}}}
+          ]
+        }
+        """
+        system_prompt = prompt_manager.get_system_prompt()
+        planning_guide = prompt_manager.get_tool_planning_prompt()
+        user_prompt = (
+            (planning_guide or "你将以工具编排的方式完成任务。只输出 steps JSON。")
+        )
+        context_info = {
+            "user_id": user_id,
+            "channel": (context or {}).get("channel") if context else None,
+            "thread_id": (context or {}).get("thread_id") if context else None,
+        }
+        plan_input = {
+            "understanding": understanding,
+            "context": context_info,
+        }
+        try:
+            plan = await self.llm.chat_json(
+                system_prompt=system_prompt,
+                user_prompt=f"输入：\n{json.dumps(plan_input, ensure_ascii=False)}\n\n请输出工具计划JSON。\n{user_prompt}",
+                temperature=0.2,
+                max_tokens=800,
+            )
+            if not isinstance(plan, dict):
+                return {"steps": []}
+            steps = plan.get("steps")
+            if not isinstance(steps, list):
+                return {"steps": []}
+            return {"steps": steps}
+        except Exception:
+            return {"steps": []}
+    
+    async def _execute_actions(self, understanding: Dict[str, Any], user_id: str, *, context: Optional[Dict[str, Any]] = None, trace_id: str) -> Dict[str, Any]:
         """
         根据理解结果执行动作 - 增强版，支持信息完整性检查
         """
         result = {"actions_taken": []}
         
-        # 🚨 重要：如果需要澄清信息，不执行任何操作
+        # 🚨 重要：如果需要澄清信息，先存一条对话记忆用于多轮上下文（不执行业务动作）
         if understanding.get('need_clarification'):
-            logger.info("Information incomplete, skipping actions until clarification")
+            try:
+                entities = understanding.get('entities', {})
+                ai_data = {
+                    'intent': 'clarification_pending',
+                    'entities': entities,
+                    'need_clarification': True,
+                    'timestamp': datetime.now().isoformat(),
+                }
+                # 确保有 occurred_at，便于时间序排序
+                if not ai_data.get('occurred_at'):
+                    ai_data['occurred_at'] = datetime.now().isoformat()
+                # 线程/追踪信息
+                if context and context.get('thread_id'):
+                    ai_data['thread_id'] = context.get('thread_id')
+                ai_data['trace_id'] = trace_id
+                # 生成嵌入
+                _emb = None
+                try:
+                    _embs = await self.llm.embed([understanding.get('original_content', '')])
+                    _emb = _embs[0] if _embs else None
+                except Exception:
+                    _emb = None
+                store_result = await self._call_mcp_tool(
+                    'store',
+                    content=understanding.get('original_content', ''),
+                    ai_data=ai_data,
+                    user_id=user_id,
+                    embedding=_emb
+                )
+                result['actions_taken'].append({'action': 'store', 'result': store_result})
+            except Exception as e:
+                logger.error(f"Failed to store clarification context: {e}")
+            logger.info("Information incomplete, stored context and waiting for clarification")
             return result
         
-        # 只有信息完整时才执行操作
+        # 只有信息完整时才尝试执行动作（由 LLM 决定是否需要行动）
         if not understanding.get('need_action'):
             return result
         
-        intent = understanding.get('intent')
-        entities = understanding.get('entities', {})
-        
-        # 记录类操作
-        if intent in ['record_expense', 'record_income', 'record_health', 'record_info']:
-            # 准备AI理解的数据
-            ai_data = {
-                'intent': intent,
-                'entities': entities,
-                'timestamp': datetime.now().isoformat()
-            }
-            
-            # 合并所有实体信息
-            ai_data.update(entities)
-            
-            # 调用MCP store工具
-            store_result = await self._call_mcp_tool(
-                'store',
-                content=understanding.get('original_content', entities.get('content', '')),
-                ai_data=ai_data,
-                user_id=user_id
-            )
-            
-            result['actions_taken'].append({
-                'action': 'store',
-                'result': store_result
-            })
-            
-            # 如果是财务记录，自动进行本月统计
-            if intent in ['record_expense', 'record_income'] and entities.get('amount'):
-                # 获取本月的日期范围
-                now = datetime.now()
-                month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                
-                # 统计本月该类别的总额
-                category = entities.get('category', '其他')
-                filters = {
-                    'date_from': month_start.isoformat(),
-                    'date_to': now.isoformat()
-                }
-                
-                # 搜索本月同类记录
-                search_result = await self._call_mcp_tool(
-                    'search',
-                    query=f"{category} {intent}",
-                    user_id=user_id,
-                    filters=filters
-                )
-                
-                # 聚合统计
-                agg_result = await self._call_mcp_tool(
-                    'aggregate',
-                    user_id=user_id,
-                    operation='sum',
-                    field='amount',
-                    filters=filters
-                )
-                
-                result['actions_taken'].extend([
-                    {'action': 'search', 'result': search_result},
-                    {'action': 'aggregate', 'result': agg_result}
-                ])
-                
-                # 如果需要，还可以统计今日总额
-                if entities.get('occurred_at'):
-                    occurred_date = datetime.fromisoformat(entities['occurred_at']).date()
-                    if occurred_date == now.date():
-                        today_filters = {
-                            'date_from': now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat(),
-                            'date_to': now.isoformat()
-                        }
-                        
-                        today_agg = await self._call_mcp_tool(
-                            'aggregate',
-                            user_id=user_id,
-                            operation='sum',
-                            field='amount',
-                            filters=today_filters
-                        )
-                        
-                        result['actions_taken'].append({
-                            'action': 'aggregate',
-                            'result': {'operation': 'sum', 'period': 'today', 'result': today_agg.get('result', 0)}
-                        })
-            
-            # 如果是健康记录，查找同一人的历史数据
-            elif intent == 'record_health' and entities.get('person'):
-                person = entities['person']
-                metric = entities.get('metric', '')
-                
-                # 搜索该家庭成员的历史健康数据
-                search_result = await self._call_mcp_tool(
-                    'search',
-                    query=f"{person} {metric}",
-                    user_id=user_id,
-                    filters=None
-                )
-                
-                result['actions_taken'].append({
-                    'action': 'search',
-                    'result': search_result
-                })
-            
-            # 如果需要设置提醒
-            if entities.get('remind_time') and store_result.get('success'):
-                reminder_result = await self._call_mcp_tool(
-                    'schedule_reminder',
-                    memory_id=store_result['id'],
-                    remind_at=entities['remind_time']
-                )
-                result['actions_taken'].append({
-                    'action': 'schedule_reminder',
-                    'result': reminder_result
-                })
-        
-        # 查询类操作
-        elif intent == 'query':
-            # 构建查询参数
-            filters = {}
-            
-            # 智能识别查询时间范围
-            query_text = entities.get('query_text', '')
-            if '本月' in query_text or '这个月' in query_text:
-                now = datetime.now()
-                filters['date_from'] = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
-                filters['date_to'] = now.isoformat()
-            elif '今天' in query_text or '今日' in query_text:
-                now = datetime.now()
-                filters['date_from'] = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-                filters['date_to'] = now.isoformat()
-            elif '昨天' in query_text:
-                yesterday = datetime.now() - timedelta(days=1)
-                filters['date_from'] = yesterday.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-                filters['date_to'] = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999).isoformat()
-            
-            # 添加其他过滤条件
-            if entities.get('date_from'):
-                filters['date_from'] = entities['date_from']
-            if entities.get('date_to'):
-                filters['date_to'] = entities['date_to']
-            if entities.get('min_amount'):
-                filters['min_amount'] = entities['min_amount']
-            if entities.get('max_amount'):
-                filters['max_amount'] = entities['max_amount']
-            
-            # 执行搜索
-            search_result = await self._call_mcp_tool(
-                'search',
-                query=entities.get('query_text', ''),
-                user_id=user_id,
-                filters=filters if filters else None
-            )
-            
-            result['actions_taken'].append({
-                'action': 'search',
-                'result': search_result
-            })
-            
-            # 如果需要聚合统计
-            if entities.get('need_aggregation') or any(word in query_text for word in ['总共', '总计', '多少钱', '统计']):
-                # 判断聚合类型
-                operation = 'sum'  # 默认求和
-                if '平均' in query_text:
-                    operation = 'avg'
-                elif '次数' in query_text or '几次' in query_text:
-                    operation = 'count'
-                
-                agg_result = await self._call_mcp_tool(
-                    'aggregate',
-                    user_id=user_id,
-                    operation=operation,
-                    field='amount' if operation != 'count' else None,
-                    filters=filters if filters else None
-                )
-                result['actions_taken'].append({
-                    'action': 'aggregate',
-                    'result': agg_result
-                })
-        
-        # 信息更新操作
-        elif intent == 'update_info' and entities.get('update_existing'):
-            # 先搜索要更新的记录
-            search_query = entities.get('update_target', '')
-            search_result = await self._call_mcp_tool(
-                'search',
-                query=search_query,
-                user_id=user_id,
-                filters={'limit': 1}  # 只获取最新的一条
-            )
-            
-            # 存储新信息（AI会在回复中说明这是更新）
-            ai_data = {
-                'intent': 'update',
-                'previous_record': search_result[0] if search_result else None,
-                'entities': entities,
-                'timestamp': datetime.now().isoformat()
-            }
-            ai_data.update(entities)
-            
-            store_result = await self._call_mcp_tool(
-                'store',
-                content=f"[更新] {understanding.get('original_content', '')}",
-                ai_data=ai_data,
-                user_id=user_id
-            )
-            
-            result['actions_taken'].extend([
-                {'action': 'search', 'result': search_result},
-                {'action': 'store', 'result': store_result}
-            ])
+        # 先让 LLM 产出通用工具计划
+        plan = await self._build_tool_plan(understanding, user_id, context=context)
+        steps = plan.get('steps') or []
+
+        # 若计划为空，作为兜底不执行具体动作，仅返回
+        if not steps:
+            return result
+
+        last_store_id: Optional[str] = None
+        allowed_tools = {"store", "search", "aggregate", "schedule_reminder", "get_pending_reminders", "mark_reminder_sent"}
+
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            tool = step.get('tool')
+            args = step.get('args') or {}
+            if tool not in allowed_tools:
+                continue
+
+            # 注入通用参数
+            if tool in {"store", "search", "aggregate", "get_pending_reminders"}:
+                args.setdefault('user_id', user_id)
+
+            # 解析占位符依赖
+            if tool == 'schedule_reminder':
+                mem_id = args.get('memory_id')
+                if mem_id == '$LAST_STORE_ID' and last_store_id:
+                    args['memory_id'] = last_store_id
+                if args.get('from_last_store') and last_store_id:
+                    args['memory_id'] = last_store_id
+                    args.pop('from_last_store', None)
+
+            # 生成嵌入：store.content 或 search.query
+            try:
+                if tool == 'store':
+                    text_for_embed = args.get('content') or understanding.get('original_content', '')
+                    if text_for_embed:
+                        embs = await self.llm.embed([text_for_embed])
+                        args.setdefault('embedding', (embs[0] if embs else None))
+                    # 最低限保障：ai_data 合并 entities 与 occurred_at
+                    ai_data = args.get('ai_data') or {}
+                    entities = understanding.get('entities', {})
+                    merged = {**entities, **ai_data}
+                    if not merged.get('occurred_at'):
+                        merged['occurred_at'] = datetime.now().isoformat()
+                    if context and context.get('thread_id'):
+                        merged.setdefault('thread_id', context.get('thread_id'))
+                    merged.setdefault('trace_id', trace_id)
+                    # M1：将附件元数据纳入存储（便于后续检索与追溯）
+                    if context and isinstance(context.get('attachments'), list):
+                        merged.setdefault('attachments', context.get('attachments'))
+                    args['ai_data'] = merged
+                elif tool == 'search':
+                    q = args.get('query')
+                    if q and not args.get('query_embedding'):
+                        embs = await self.llm.embed([q])
+                        args['query_embedding'] = embs[0] if embs else None
+                elif tool == 'aggregate':
+                    pass
+            except Exception:
+                # 忽略嵌入失败，走无嵌入路径
+                pass
+
+            # 执行工具
+            exec_result = await self._call_mcp_tool(tool, **args)
+            result['actions_taken'].append({'action': tool, 'result': exec_result})
+
+            # 记录 last_store_id 供后续依赖
+            if tool == 'store' and isinstance(exec_result, dict) and exec_result.get('success'):
+                last_store_id = exec_result.get('id') or last_store_id
         
         return result
+
+    async def _store_chat_turns(
+        self,
+        *,
+        user_id: str,
+        thread_id: Optional[str],
+        trace_id: str,
+        user_message: str,
+        assistant_message: str,
+        understanding: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """存储一对对话回合，便于连续对话与回溯。"""
+        common = {
+            'type': 'chat_turn',
+            'thread_id': thread_id,
+            'trace_id': trace_id,
+            'channel': (context or {}).get('channel') if context else None,
+            'timestamp': datetime.now().isoformat()
+        }
+        user_ai = {
+            **common,
+            'role': 'user',
+            'intent': understanding.get('intent'),
+            'entities': understanding.get('entities', {})
+        }
+        assistant_ai = {
+            **common,
+            'role': 'assistant',
+            'intent': understanding.get('intent'),
+            'entities': understanding.get('entities', {})
+        }
+        # 批量生成两段文本的嵌入
+        _user_emb = None
+        _assistant_emb = None
+        try:
+            embs = await self.llm.embed([user_message, assistant_message])
+            if embs and len(embs) >= 2:
+                _user_emb, _assistant_emb = embs[0], embs[1]
+        except Exception:
+            _user_emb = None
+            _assistant_emb = None
+        await self._call_mcp_tool('store', content=user_message, ai_data=user_ai, user_id=user_id, embedding=_user_emb)
+        await self._call_mcp_tool('store', content=assistant_message, ai_data=assistant_ai, user_id=user_id, embedding=_assistant_emb)
+
+    async def _maybe_summarize_thread(self, *, user_id: str, thread_id: Optional[str], trace_id: str) -> None:
+        """当同一线程回合数过多时，生成摘要并存储。"""
+        if not thread_id:
+            return
+        # 拉取最近若干条，筛选当线程的 chat_turn
+        recent = await self._call_mcp_tool('search', query='', user_id=user_id, filters={'limit': 50})
+        turns = [r for r in recent if isinstance(r, dict) and isinstance(r.get('ai_understanding'), dict) and r['ai_understanding'].get('type') == 'chat_turn' and r['ai_understanding'].get('thread_id') == thread_id]
+        if len(turns) < 12:
+            return
+        # 生成摘要
+        convo_text = "\n".join([f"- {t.get('content','')}" for t in turns[-10:]])
+        system_prompt = prompt_manager.get_system_prompt() + "\n请为以上多轮对话生成简洁摘要，保留关键事实、已确认信息与未决问题。"
+        user_prompt = f"需要摘要的最近对话片段：\n{convo_text}\n\n请输出 5-8 行的要点列表。"
+        summary = await self.llm.chat_text(system_prompt=system_prompt, user_prompt=user_prompt, temperature=0.3, max_tokens=200)
+        ai_data = {
+            'type': 'thread_summary',
+            'thread_id': thread_id,
+            'trace_id': trace_id,
+            'window': 'last_10_turns',
+            'timestamp': datetime.now().isoformat()
+        }
+        _s_emb = None
+        try:
+            _s_list = await self.llm.embed([summary])
+            _s_emb = _s_list[0] if _s_list else None
+        except Exception:
+            _s_emb = None
+        await self._call_mcp_tool('store', content=summary, ai_data=ai_data, user_id=user_id, embedding=_s_emb)
+
+    async def _get_recent_thread_summaries(self, user_id: str, thread_id: Optional[str], limit: int = 1, *, shared_thread: bool = False, channel: Optional[str] = None) -> List[Dict[str, Any]]:
+        filters: Dict[str, Any] = {'limit': 30, 'type': 'thread_summary'}
+        if thread_id:
+            filters['thread_id'] = thread_id
+        if shared_thread:
+            filters['shared_thread'] = True
+        if channel:
+            filters['channel'] = channel
+        recent = await self._call_mcp_tool('search', query='thread summary', user_id=user_id, filters=filters)
+        summaries: List[Dict[str, Any]] = []
+        for r in recent:
+            if not isinstance(r, dict):
+                continue
+            aiu = r.get('ai_understanding')
+            if isinstance(aiu, dict) and aiu.get('type') == 'thread_summary' and (thread_id is None or aiu.get('thread_id') == thread_id):
+                summaries.append({'content': r.get('content',''), 'ai_understanding': aiu, 'time': r.get('occurred_at')})
+        return summaries[:limit]
+
+    async def _semantic_search(self, user_id: str, query: str, top_k: int = 5, *, thread_id: Optional[str] = None, shared_thread: bool = False, channel: Optional[str] = None) -> List[Dict[str, Any]]:
+        if not query:
+            return []
+        filters: Dict[str, Any] = {'limit': top_k}
+        if thread_id:
+            filters['thread_id'] = thread_id
+        if shared_thread:
+            filters['shared_thread'] = True
+        if channel:
+            filters['channel'] = channel
+        # 统一由引擎侧生成查询向量
+        _q_emb = None
+        try:
+            _q = query if query is not None else ""
+            if _q:
+                _q_embs = await self.llm.embed([_q])
+                _q_emb = _q_embs[0] if _q_embs else None
+        except Exception:
+            _q_emb = None
+        results = await self._call_mcp_tool('search', query=query, user_id=user_id, filters=filters, query_embedding=_q_emb)
+        formatted: List[Dict[str, Any]] = []
+        for r in results:
+            if isinstance(r, dict):
+                formatted.append({'content': r.get('content',''), 'ai_understanding': r.get('ai_understanding', {}), 'time': r.get('occurred_at')})
+        return formatted
+
+    async def _persist_interaction(
+        self,
+        *,
+        trace_id: str,
+        user_id: str,
+        thread_id: Optional[str],
+        channel: Optional[str],
+        message_id: Optional[str],
+        input_text: str,
+        understanding: Dict[str, Any],
+        actions: Dict[str, Any],
+        response_text: str,
+    ) -> None:
+        from .db.database import get_session
+        from .db.models import Interaction
+        # 仅当 user_id 是合法 UUID 时记录，以避免外键错误
+        if not _looks_like_uuid(user_id):
+            logger.warning("interaction.persist.skip.invalid_user_id", user_id=user_id, trace_id=trace_id)
+            return
+        async with get_session() as session:
+            session.add(Interaction(
+                id=uuid.UUID(trace_id) if _looks_like_uuid(trace_id) else uuid.uuid4(),
+                user_id=uuid.UUID(user_id),
+                thread_id=thread_id,
+                channel=channel,
+                message_id=message_id,
+                input_text=input_text,
+                understanding_json=understanding,
+                actions_json=actions,
+                tool_calls_json=None,
+                response_text=response_text,
+            ))
+
+
     
     async def _generate_response(self, original_message: str, understanding: Dict[str, Any], execution_result: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         """
@@ -536,17 +865,12 @@ class AIEngine:
 记住要像家人一样温暖，但又保持专业的精确度。
 """
         
-        response = await self.openai_client.chat.completions.create(
-            model=settings.OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
+        return await self.llm.chat_text(
+            system_prompt=system_prompt,
+            user_prompt=prompt,
             temperature=0.5,
-            max_tokens=200
+            max_tokens=200,
         )
-        
-        return response.choices[0].message.content
     
     async def _generate_normal_response(self, original_message: str, understanding: Dict[str, Any], execution_result: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         """
@@ -635,27 +959,63 @@ class AIEngine:
 - 确认提醒的具体时间
 - 如果是重复提醒，说明频率
 
-记住要像家人一样温暖，给出实用的建议。
+记住要像关心家人一样，给出简洁、实用的建议。
 """
         
-        response = await self.openai_client.chat.completions.create(
-            model=settings.OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
+        generated_response = await self.llm.chat_text(
+            system_prompt=system_prompt,
+            user_prompt=prompt,
             temperature=0.7,
-            max_tokens=500
+            max_tokens=500,
         )
         
-        generated_response = response.choices[0].message.content
+        # 如果存在可绘制的聚合分组，渲染图表并追加链接（M2 回退方案）
+        chart_url: Optional[str] = None
+        try:
+            for action in execution_result.get('actions_taken', []):
+                if action.get('action') == 'aggregate' and isinstance(action.get('result'), dict):
+                    groups = action['result'].get('groups')
+                    if isinstance(groups, list) and groups:
+                        x_labels: List[str] = []
+                        y_values: List[float] = []
+                        for g in groups:
+                            grp = g.get('group') or {}
+                            label = grp.get('period') or grp.get('ai_group') or ''
+                            if isinstance(label, str):
+                                x_labels.append(label)
+                            else:
+                                x_labels.append(str(label))
+                            y_values.append(float(g.get('result') or 0))
+                        render_res = await self._call_mcp_tool('render_chart', type='line', title='统计趋势', x=x_labels, series=[{"name": "value", "y": y_values}])
+                        path = render_res.get('path') if isinstance(render_res, dict) else None
+                        if path:
+                            chart_url = make_signed_url(path)
+                            break
+        except Exception:
+            pass
         
         # 后处理：确保回复不会太长
         if len(generated_response) > 500 and context and context.get('channel') == 'threema':
             # 对于Threema，截断过长的消息
             generated_response = generated_response[:497] + "..."
+        # 追加图表链接
+        if chart_url:
+            generated_response += f"\n图表：{chart_url}"
         
         return generated_response
+
+    async def generate_chart_and_text(self, *, user_id: str, title: str, x: List[str], series: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        M2：通用图表渲染包装。返回 {text, image_path}。
+        供未来的 LLM 工具计划或手工调用。
+        """
+        try:
+            render = await self._call_mcp_tool('render_chart', type='line', title=title, x=x, series=series)
+            image_path = render.get('path') if isinstance(render, dict) else None
+            summary = f"{title}: 共 {len(x)} 个点。"
+            return {"text": summary, "image_path": image_path}
+        except Exception as e:
+            return {"text": f"{title}: 图表生成失败", "error": str(e)}
     
     async def _call_mcp_tool(self, tool_name: str, **kwargs) -> Dict[str, Any]:
         """
@@ -709,20 +1069,23 @@ class AIEngine:
         
         try:
             # 从数据库获取所有活跃用户
-            from .db.database import get_db
-            async with get_db() as db:
+            from .db.database import get_session
+            async with get_session() as db:
                 # 获取所有有 Threema 渠道的用户
-                user_rows = await db.fetch(
+                from sqlalchemy import text
+                result = await db.execute(text(
                     """
                     SELECT DISTINCT u.id as user_id
                     FROM users u
                     JOIN user_channels uc ON u.id = uc.user_id
                     WHERE uc.channel = 'threema'
                     """
-                )
+                ))
+                user_rows = result.fetchall()
                 
                 for row in user_rows:
-                    user_id = str(row['user_id'])
+                    # 兼容 Row/Mapping 访问
+                    user_id = str(row[0] if isinstance(row, (tuple, list)) else row['user_id'])
                     
                     # 获取该用户的待发送提醒
                     reminders = await self._call_mcp_tool(

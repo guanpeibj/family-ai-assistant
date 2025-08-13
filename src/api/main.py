@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
@@ -6,6 +6,9 @@ import structlog
 import asyncio
 
 from ..core.config import settings
+from ..services.media_service import verify_signature
+import base64
+import os
 from ..core.logging import get_logger
 from ..db.database import init_db, close_db
 from ..ai_engine import AIEngine
@@ -20,6 +23,7 @@ ai_engine = AIEngine()
 class MessageRequest(BaseModel):
     content: str
     user_id: str
+    thread_id: str | None = None
 
 
 # 后台任务
@@ -111,7 +115,7 @@ async def handle_message(request: MessageRequest):
     response = await ai_engine.process_message(
         content=request.content,
         user_id=request.user_id,
-        context={"channel": "api"}
+        context={"channel": "api", "thread_id": request.thread_id or request.user_id}
     )
     
     return {
@@ -132,3 +136,22 @@ async def root():
             "docs": "/docs"
         }
     }
+
+
+@app.get("/media/get")
+async def get_media(p: str = Query(...), exp: int = Query(...), sig: str = Query(...)):
+    """
+    签名媒体访问端点（回退方案）。
+    注意：仅用于 Threema 不支持媒体直发的回退；生产建议使用对象存储签名URL。
+    """
+    try:
+        rel = base64.urlsafe_b64decode(p.encode('utf-8')).decode('utf-8')
+        if not verify_signature(rel, exp, sig):
+            raise HTTPException(status_code=403, detail="Invalid signature or expired")
+        abs_path = os.path.join(settings.MEDIA_ROOT, rel)
+        if not os.path.exists(abs_path):
+            raise HTTPException(status_code=404, detail="File not found")
+        from fastapi.responses import FileResponse
+        return FileResponse(abs_path)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

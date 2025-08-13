@@ -13,7 +13,9 @@ import hmac
 from datetime import datetime
 
 from src.core.config import settings
-from src.core.logging import logger
+from src.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class ThreemaService:
@@ -33,7 +35,9 @@ class ThreemaService:
         else:
             # 生成新的密钥对（首次使用）
             self.private_key = PrivateKey.generate()
-            logger.info(f"Generated new key pair. Public key: {self.private_key.public_key.encode(HexEncoder).decode()}")
+            logger.info(
+                f"Generated new key pair. Public key: {self.private_key.public_key.encode(HexEncoder).decode()}"
+            )
         
         # 公钥缓存（避免重复查询）
         self._public_key_cache = {}
@@ -73,7 +77,7 @@ class ThreemaService:
             }
             
         except Exception as e:
-            logger.error(f"Failed to decrypt message: {e}")
+            get_logger(__name__).error(f"Failed to decrypt message: {e}")
             # 即使解密失败，也返回能返回的信息
             return {
                 'channel': 'threema',
@@ -125,13 +129,43 @@ class ThreemaService:
                         }
                         
         except Exception as e:
-            logger.error(f"Failed to send message: {e}")
+            get_logger(__name__).error(f"Failed to send message: {e}")
             return {
                 'success': False,
                 'error': str(e),
                 'channel': 'threema',
                 'to': to_id
             }
+
+    async def send_file(self, to_id: str, file_bytes: bytes, filename: str, content_type: str) -> Dict[str, Any]:
+        """
+        发送文件到 Threema（回退实现：发送签名链接或简短说明）。
+        说明：Threema Gateway E2E 媒体发送需要专用端点与加密流程，此处先提供占位与回退方案，
+        后续替换为真实媒体端点调用。
+        """
+        try:
+            # 回退：暂不实现直传，返回不支持，交由上层转为链接
+            return {
+                'success': False,
+                'error': 'Media send not implemented in gateway fallback',
+                'channel': 'threema',
+                'to': to_id
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e),
+                'channel': 'threema',
+                'to': to_id
+            }
+
+    async def send_image(self, to_id: str, image_bytes: bytes, filename: str = "image.png") -> Dict[str, Any]:
+        return await self.send_file(to_id, image_bytes, filename, content_type="image/png")
+
+    async def send_image_link(self, to_id: str, url: str, title: str | None = None) -> Dict[str, Any]:
+        """发送图片链接（回退方案）。"""
+        text = f"{title + '\n' if title else ''}图片：{url}"
+        return await self.send_message(to_id, text)
     
     async def _get_public_key(self, threema_id: str) -> bytes:
         """获取用户公钥（带缓存）"""

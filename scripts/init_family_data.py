@@ -1,200 +1,142 @@
 #!/usr/bin/env python3
 """
-阿福(FAA) 家庭数据初始化脚本
-支持从本地私有配置文件加载家庭信息
+FAA 家庭数据初始化脚本（将“家庭设定”写入 memories，不放 system prompt）
+
+数据来源优先级：
+- 环境变量 FAMILY_DATA_JSON
+- 本地文件 family_private_data.json（私有）
+- 示例文件 family_data_example.json（示例）
 """
 import asyncio
 import json
 import uuid
-from datetime import datetime, date
+from datetime import datetime
 import os
 import sys
 from pathlib import Path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.db.database import get_db
-from src.core.logging import setup_logging
+from src.db.database import get_session
+from src.db.models import User, Memory
 
-# 设置日志
-logger = setup_logging()
-
-# 私有数据文件路径
 PRIVATE_DATA_FILE = Path("family_private_data.json")
 EXAMPLE_DATA_FILE = Path("family_data_example.json")
 
 
-def load_family_data():
-    """加载家庭数据，优先从环境变量读取，然后从文件读取"""
-    # 首先尝试从环境变量读取（CI/CD部署时使用）
-    family_data_env = os.getenv('FAMILY_DATA_JSON')
-    if family_data_env:
+def load_family_data() -> dict:
+    data_env = os.getenv('FAMILY_DATA_JSON')
+    if data_env:
         try:
             print("🔐 从环境变量加载家庭数据")
-            return json.loads(family_data_env)
+            return json.loads(data_env)
         except json.JSONDecodeError as e:
-            print(f"❌ 环境变量 FAMILY_DATA_JSON 格式不正确: {e}")
-    
-    # 然后尝试从私有文件读取（本地开发时使用）
+            print(f"❌ FAMILY_DATA_JSON 不是有效的 JSON: {e}")
     if PRIVATE_DATA_FILE.exists():
         print(f"📁 加载私有家庭数据: {PRIVATE_DATA_FILE}")
         with open(PRIVATE_DATA_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
-    elif EXAMPLE_DATA_FILE.exists():
+    if EXAMPLE_DATA_FILE.exists():
         print(f"📋 使用示例数据: {EXAMPLE_DATA_FILE}")
-        print("💡 提示：创建 family_private_data.json 来使用你的真实家庭数据")
+        print("💡 提示：创建 family_private_data.json 使用真实数据")
         with open(EXAMPLE_DATA_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
-    else:
-        print("❌ 错误：找不到家庭数据文件")
-        print(f"请创建 {PRIVATE_DATA_FILE} 或 {EXAMPLE_DATA_FILE}")
-        sys.exit(1)
+    print("❌ 没有可用的家庭数据源。请配置 FAMILY_DATA_JSON 或提供 family_private_data.json/family_data_example.json")
+    sys.exit(1)
+
+
+async def get_or_create_user(session) -> uuid.UUID:
+    # 如果已有用户，复用第一个；否则创建
+    result = await session.execute("SELECT id FROM users ORDER BY created_at ASC LIMIT 1")
+    row = result.first()
+    if row and row[0]:
+        return row[0]
+    new_id = uuid.uuid4()
+    session.add(User(id=new_id))
+    await session.flush()
+    return new_id
+
+
+async def insert_memory(session, user_id: uuid.UUID, content: str, ai_understanding: dict) -> None:
+    mem = Memory(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        content=content,
+        ai_understanding=ai_understanding,
+        occurred_at=datetime.now(),
+    )
+    session.add(mem)
+    await session.flush()
+
+
+def build_family_profile_aiu(family_data: dict) -> dict:
+    # 统一的家庭设定结构，完全开放；供 AI 检索与使用
+    profile = {
+        "type": "family_profile",
+        "created_from": family_data.get("source", "init_script"),
+        "created_at": datetime.now().isoformat(),
+    }
+    # 成员
+    if isinstance(family_data.get("family_members"), list):
+        profile["members"] = family_data["family_members"]
+    # 偏好/规则
+    if isinstance(family_data.get("preferences"), list):
+        profile["preferences"] = family_data["preferences"]
+    # 重要信息
+    if isinstance(family_data.get("important_info"), list):
+        profile["important_info"] = family_data["important_info"]
+    # 联系人
+    if isinstance(family_data.get("contacts"), list):
+        profile["contacts"] = family_data["contacts"]
+    # 其他任意扩展字段
+    for key in ("address", "budget", "medical_notes", "notes"):
+        if key in family_data:
+            profile[key] = family_data[key]
+    return profile
 
 
 async def init_family_data():
-    """初始化家庭基础数据"""
-    print("🏠 开始初始化家庭数据...")
-    
-    # 加载家庭数据
+    print("🏠 开始初始化家庭设定到 memories...")
     family_data = load_family_data()
-    
-    async with get_db() as db:
-        # 1. 创建默认用户（如果不存在）
-        user_id = uuid.uuid4()
-        
-        # 检查是否已有用户
-        existing_user = await db.fetchrow(
-            "SELECT id FROM users WHERE username = $1",
-            family_data.get("username", "family_default")
-        )
-        
-        if existing_user:
-            user_id = existing_user['id']
-            print(f"✓ 使用已存在的用户: {user_id}")
-        else:
-            # 创建新用户
-            await db.execute(
-                """
-                INSERT INTO users (id, username, created_at)
-                VALUES ($1, $2, $3)
-                """,
-                user_id, 
-                family_data.get("username", "family_default"), 
-                datetime.now()
-            )
-            print(f"✓ 创建新用户: {user_id}")
-        
-        # 2. 初始化家庭成员信息
-        if "family_members" in family_data:
-            for member in family_data["family_members"]:
-                memory_id = uuid.uuid4()
-                await db.execute(
-                    """
-                    INSERT INTO memories (
-                        id, user_id, content, ai_understanding,
-                        created_at, occurred_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    memory_id,
-                    user_id,
-                    member['content'],
-                    json.dumps(member['ai_understanding'], ensure_ascii=False),
-                    datetime.now(),
-                    datetime.now()
-                )
-            print(f"✓ 家庭成员信息初始化完成 ({len(family_data['family_members'])}人)")
-        
-        # 3. 初始化家庭重要信息
-        if "important_info" in family_data:
-            for info in family_data["important_info"]:
-                memory_id = uuid.uuid4()
-                await db.execute(
-                    """
-                    INSERT INTO memories (
-                        id, user_id, content, ai_understanding,
-                        created_at, occurred_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    memory_id,
-                    user_id,
-                    info['content'],
-                    json.dumps(info['ai_understanding'], ensure_ascii=False),
-                    datetime.now(),
-                    datetime.now()
-                )
-            print(f"✓ 家庭重要信息初始化完成 ({len(family_data['important_info'])}条)")
-        
-        # 4. 初始化常用联系人
-        if "contacts" in family_data:
-            for contact in family_data["contacts"]:
-                memory_id = uuid.uuid4()
-                await db.execute(
-                    """
-                    INSERT INTO memories (
-                        id, user_id, content, ai_understanding,
-                        created_at, occurred_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    memory_id,
-                    user_id,
-                    contact['content'],
-                    json.dumps(contact['ai_understanding'], ensure_ascii=False),
-                    datetime.now(),
-                    datetime.now()
-                )
-            print(f"✓ 常用联系人初始化完成 ({len(family_data['contacts'])}个)")
-        
-        # 5. 初始化日常习惯和偏好
-        if "preferences" in family_data:
-            for pref in family_data["preferences"]:
-                memory_id = uuid.uuid4()
-                await db.execute(
-                    """
-                    INSERT INTO memories (
-                        id, user_id, content, ai_understanding,
-                        created_at, occurred_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6)
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    memory_id,
-                    user_id,
-                    pref['content'],
-                    json.dumps(pref['ai_understanding'], ensure_ascii=False),
-                    datetime.now(),
-                    datetime.now()
-                )
-            print(f"✓ 日常习惯和偏好初始化完成 ({len(family_data['preferences'])}条)")
-        
-        # 6. 设置Threema渠道（优先使用配置文件中的ID）
-        threema_id = family_data.get("threema_id") or os.getenv('USER_THREEMA_ID')
-        if threema_id:
-            await db.execute(
-                """
-                INSERT INTO user_channels (user_id, channel, channel_id)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (user_id, channel) DO UPDATE
-                SET channel_id = $3
-                """,
-                user_id, 'threema', threema_id
-            )
-            print(f"✓ Threema渠道配置完成: {threema_id}")
-        
-        print("\n🎉 家庭数据初始化成功！")
-        print(f"用户ID: {user_id}")
-        
-        if PRIVATE_DATA_FILE.exists():
-            print("\n✅ 已使用你的私有家庭数据")
-        else:
-            print("\n⚠️  当前使用的是示例数据")
-            print("要使用真实数据，请：")
-            print(f"1. 复制 {EXAMPLE_DATA_FILE} 为 {PRIVATE_DATA_FILE}")
-            print("2. 编辑 family_private_data.json 填入你的真实家庭信息")
-            print("3. 重新运行此脚本")
-        
-        print("\n现在可以开始使用阿福了！")
+
+    async with get_session() as session:
+        user_id = await get_or_create_user(session)
+        print(f"✓ 使用用户: {user_id}")
+
+        # 1) 家庭总设定（单条）
+        family_profile = build_family_profile_aiu(family_data)
+        await insert_memory(session, user_id, content="家庭设定初始化", ai_understanding=family_profile)
+        print("✓ 已写入家庭设定 (family_profile)")
+
+        # 2) 个体成员档案（可选，多条）
+        members = family_data.get("family_members") or []
+        if isinstance(members, list):
+            for m in members:
+                aiu = {
+                    "type": "family_member_profile",
+                    "person": m.get("name") or m.get("id") or "unknown",
+                    "role": m.get("role"),
+                    "birthday": m.get("birthday"),
+                    "notes": m.get("notes"),
+                }
+                await insert_memory(session, user_id, content=f"成员档案：{aiu['person']}", ai_understanding=aiu)
+            print(f"✓ 成员档案初始化完成 ({len(members)} 人)")
+
+        # 3) 可选：重要信息/偏好/联系人作为独立记忆（如果需要更细粒度）
+        for block_key, block_type in (
+            ("important_info", "family_important_info"),
+            ("preferences", "family_preference"),
+            ("contacts", "family_contact"),
+        ):
+            items = family_data.get(block_key)
+            if isinstance(items, list):
+                for item in items:
+                    aiu = {"type": block_type, **item}
+                    content = item.get("content") or f"{block_key}"
+                    await insert_memory(session, user_id, content=content, ai_understanding=aiu)
+                print(f"✓ {block_key} 初始化完成 ({len(items)} 条)")
+
+    print("\n🎉 家庭设定初始化完成！后续个性化可由 AI 在运行中继续补充。")
 
 
 if __name__ == "__main__":
-    asyncio.run(init_family_data()) 
+    asyncio.run(init_family_data())

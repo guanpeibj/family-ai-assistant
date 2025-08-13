@@ -2,6 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# 使用国内镜像源加速构建
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
+    sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources
+
 # 安装系统依赖和开发工具
 RUN apt-get update && apt-get install -y \
     gcc \
@@ -12,19 +16,20 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装Python包管理工具
-RUN pip install --no-cache-dir uv
+RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple/ uv
 
-# 复制依赖文件
+# 复制依赖文件与源码（可编辑安装需要 src 存在）
 COPY pyproject.toml .
+COPY src ./src
 
 # 安装项目依赖（可编辑模式）
 RUN uv venv .venv && \
     . .venv/bin/activate && \
-    uv pip install -e .
+    uv pip install -i https://pypi.tuna.tsinghua.edu.cn/simple/ -e .
 
 # 安装开发依赖
 RUN . .venv/bin/activate && \
-    uv pip install httpx pytest pytest-asyncio ipython
+    uv pip install -i https://pypi.tuna.tsinghua.edu.cn/simple/ httpx pytest pytest-asyncio ipython
 
 # 设置PATH包含虚拟环境
 ENV PATH="/app/.venv/bin:$PATH"

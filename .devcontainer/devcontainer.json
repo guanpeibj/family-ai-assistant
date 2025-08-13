@@ -5,6 +5,7 @@
     "docker-compose.dev.yml"
   ],
   "service": "faa-api",
+  "runServices": ["postgres", "faa-mcp", "faa-api"],
   "workspaceFolder": "/app",
   
   // 使用的功能
@@ -14,10 +15,14 @@
   },
   
   // 端口转发
-  "forwardPorts": [8000, 5432],
+  "forwardPorts": [8000, 9000, 5432],
   "portsAttributes": {
     "8000": {
       "label": "FastAPI",
+      "onAutoForward": "notify"
+    },
+    "9000": {
+      "label": "MCP",
       "onAutoForward": "notify"
     },
     "5432": {
@@ -31,15 +36,11 @@
     "PYTHONPATH": "/app"
   },
   
-  // 启动后命令
-  "postCreateCommand": "pip install -e . && pip install httpx pytest pytest-asyncio",
-  "postStartCommand": "docker-compose logs -f postgres &",
-  
   // VS Code 设置
   "customizations": {
     "vscode": {
       "settings": {
-        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.defaultInterpreterPath": "/app/.venv/bin/python",
         "python.linting.enabled": true,
         "python.linting.pylintEnabled": false,
         "python.formatting.provider": "black",

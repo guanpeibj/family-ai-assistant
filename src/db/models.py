@@ -68,10 +68,36 @@ class Reminder(Base):
     __tablename__ = "reminders"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    memory_id = Column(UUID(as_uuid=True), index=True)  # 关联的记忆
+    memory_id = Column(UUID(as_uuid=True), ForeignKey('memories.id'), index=True)  # 关联的记忆（外键）
     remind_at = Column(DateTime(timezone=True), nullable=False, index=True)
-    sent = Column(DateTime(timezone=True))  # 发送时间，NULL表示未发送
+    sent_at = Column(DateTime(timezone=True))  # 发送时间，NULL表示未发送
     
     __table_args__ = (
-        Index('idx_reminders_pending', 'remind_at', postgresql_where=(sent.is_(None))),
+        Index('idx_reminders_pending', 'remind_at', postgresql_where=(sent_at.is_(None))),
+    )
+
+
+class Interaction(Base):
+    """交互追踪表 - 用于全链路回溯与排障"""
+    __tablename__ = 'interactions'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    # 关联与上下文
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False, index=True)
+    thread_id = Column(String(255), index=True)
+    channel = Column(String(64), index=True)
+    message_id = Column(String(255), index=True)
+
+    # 交互内容
+    input_text = Column(Text, nullable=False)
+    understanding_json = Column(JSONB)
+    actions_json = Column(JSONB)
+    tool_calls_json = Column(JSONB)
+    response_text = Column(Text)
+    error = Column(Text)
+
+    __table_args__ = (
+        Index('idx_interactions_user_created', 'user_id', 'created_at'),
     )

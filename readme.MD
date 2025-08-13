@@ -6,7 +6,7 @@
 
 主要给我和我妻子使用，解决我家的实际需求：孩子多、杂事多，需要ai作为助理帮我们记忆、整理和提醒。整体来说，FAA的作用是，智能地接收、储存我的家庭信息，并智能地分析家庭信息、做出反馈，以及智能地提醒。FAA通过Threema robbot、邮件、微信公众号/小程序的方式，和我以及我妻子沟通。在Threema 中，我已经为FFA准备了一个账号，FFA可以作为一个虚拟个体，在我和我妻子的家庭群中，和我们沟通。 
 
-FFA 会作为我送给妻子的生日礼物，她操劳家务，独自带3个孩子，希望这个应用实实在在地帮助她。离生日不剩几天了，希望几天内做完。
+FFA 会作为我送给妻子的生日礼物，她操劳家务，独自带3个孩子，希望这个应用实实在在地帮助她。
 
 ## 具体使用举例
 
@@ -52,17 +52,9 @@ python 3.12.11，openai 1.90.0，uv，MCP，PostgreSQL + pgvector， FastAPI
 
 应该具备简单的CICD能力，项github仓库提交代码，应该支持一键部署到目标云服务器，节省时间。
 
-## 快速部署
-
-```bash
-# 一键部署（5分钟完成）
-curl -fsSL https://raw.githubusercontent.com/guanpeibj/family-ai-assistant/main/scripts/quick-deploy.sh | bash
-```
-
-详细部署说明请查看 [DEPLOY.md](DEPLOY.md)
 
 ## 其他
 
 项目在github上的地址是：https://github.com/guanpeibj/family-ai-assistant
 
-总之，我希望FFA是一款 由ai驱动、尽量减少工程预设的、实在有用的ai应用。开发要求是，简单直接实现、便于理解、留够扩展可能 但不要过度设计。可以在几天内快速完成第一个版本。
+总之，我希望FFA是一款 由ai驱动、尽量减少工程预设的、实在有用的ai应用。开发要求是，简单直接实现、便于理解、留够扩展可能 但不要过度设计。

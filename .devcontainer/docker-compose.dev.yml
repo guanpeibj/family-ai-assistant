@@ -4,13 +4,9 @@ services:
   faa-api:
     # 开发环境覆盖设置
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile.dev
     volumes:
-      - ..:/app:cached
+      - .:/app:cached
       - /app/.venv  # 防止覆盖容器内的虚拟环境
-    environment:
-      - PYTHONDONTWRITEBYTECODE=1
-      - PYTHONUNBUFFERED=1
-      - APP_ENV=development
-    command: sleep infinity  # 保持容器运行，手动启动服务 
+    # 开发态默认直接使用基础 compose 中的 uvicorn --reload 启动

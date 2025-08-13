@@ -68,6 +68,8 @@ prompts:
 ### 3. MCP 工具层（完全通用）
 - **零业务逻辑**: 所有业务理解由AI完成
 - **通用接口**: store/search/aggregate等基础能力
+- **仅消费向量**: 语义向量统一由 AI Engine 生成；MCP 通过参数 `embedding`（store）与 `query_embedding`（search）接收并在数据库执行相似度检索；未提供时退化为非向量过滤
+- **本地向量**: 默认使用本地开源向量模型（fastembed，如 `BAAI/bge-small-zh-v1.5`），无需外网与云 API；也可配置回退到 OpenAI 兼容 Embedding
 - **HTTP包装器**: 支持容器化部署
 
 ### 4. 数据模型
@@ -78,7 +80,7 @@ CREATE TABLE memories (
     user_id UUID NOT NULL,
     content TEXT NOT NULL,
     ai_understanding JSONB,  -- AI自由决定存什么
-    embedding vector(1536),  -- 语义向量
+    embedding vector(1536),  -- 语义向量（由 AI Engine 生成并传入）
     amount DECIMAL,          -- 精确金额(可选)
     occurred_at TIMESTAMP    -- 精确时间(可选)
 );

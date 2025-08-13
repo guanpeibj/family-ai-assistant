@@ -29,6 +29,10 @@ services:
       - DATABASE_URL=postgresql://faa:${POSTGRES_PASSWORD:-faa_password}@postgres:5432/family_assistant
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4-turbo-preview}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - AI_PROVIDER=${AI_PROVIDER:-openai_compatible}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL}
       - THREEMA_GATEWAY_ID=${THREEMA_GATEWAY_ID}
       - THREEMA_SECRET=${THREEMA_SECRET}
       - THREEMA_PRIVATE_KEY=${THREEMA_PRIVATE_KEY}
@@ -37,6 +41,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SECRET_KEY=${SECRET_KEY}
       - MCP_SERVER_URL=http://faa-mcp:8000
+      - MEDIA_ROOT=/data/media
     depends_on:
       postgres:
         condition: service_healthy
@@ -44,23 +49,28 @@ services:
         condition: service_started
     volumes:
       - ./src:/app/src
-    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+      - media_data:/data/media
+    command: sh -lc "/app/.venv/bin/alembic upgrade head && /app/.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload"
 
   faa-mcp:
     build:
-      context: ./mcp-server
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: docker/Dockerfile
     environment:
       - DATABASE_URL=postgresql://faa:${POSTGRES_PASSWORD:-faa_password}@postgres:5432/family_assistant
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - MEDIA_ROOT=/data/media
     depends_on:
       postgres:
         condition: service_healthy
     ports:
       - "9000:8000"  # MCP 服务端口
     volumes:
-      - ./mcp-server:/app
-    command: python generic_mcp_server.py
+      - ./mcp-server:/app/mcp-server
+      - media_data:/data/media
+    command: python mcp-server/mcp_http_wrapper.py
 
 volumes:
   postgres_data:
+  media_data:

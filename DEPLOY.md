@@ -70,6 +70,8 @@ nano .env
 ```env
 # OpenAI 配置（必需）
 OPENAI_API_KEY=sk-xxx
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 
 # 数据库密码（请修改）
 POSTGRES_PASSWORD=your_strong_password_here
