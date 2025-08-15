@@ -46,6 +46,12 @@ class GenericMCPServer:
                 if embedding is None and isinstance(ai_data, dict):
                     # 兼容：若调用方误放到 ai_data 中
                     embedding = ai_data.get('_embedding') or ai_data.get('embedding')
+                # 确保 JSON 可序列化：若传入为 numpy 类型，转 Python float
+                try:
+                    if embedding is not None and not isinstance(embedding, str):
+                        embedding = [float(x) for x in embedding]
+                except Exception:
+                    pass
                 embedding_text = self._normalize_embedding(embedding)
                 
                 # 提取 AI 识别的金额和时间（如果有）

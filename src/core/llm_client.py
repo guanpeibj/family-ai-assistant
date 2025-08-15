@@ -113,9 +113,13 @@ class LLMClient:
                     self._fastembed_model = None
             if self._fastembed_model is not None:
                 # fastembed 同步接口，放在线程池可能更稳，这里小规模直接调用
-                vectors = []
+                vectors: list[list[float]] = []
                 for emb in self._fastembed_model.embed(texts):
-                    vectors.append(list(emb))
+                    # emb 可能是 numpy.ndarray(float32)；需转为 Python float 以便 JSON 序列化
+                    try:
+                        vectors.append([float(x) for x in emb])
+                    except Exception:
+                        vectors.append([float(x) for x in list(emb)])
                 return vectors
         # 回退：openai 兼容
         if self.provider == "openai_compatible" and self._openai_client is not None:
@@ -123,7 +127,8 @@ class LLMClient:
                 model=self._openai_embedding_model,
                 input=texts,
             )
-            return [d.embedding for d in resp.data]
+            # OpenAI 返回为 Python float 列表，但为一致性仍做一次显式转换
+            return [[float(x) for x in d.embedding] for d in resp.data]
         # 最后兜底：返回空
         return []
 

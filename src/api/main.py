@@ -1,7 +1,9 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 import structlog
 import asyncio
 
@@ -108,20 +110,86 @@ async def health_check():
     }
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """更详细的 422 日志与响应，便于排障。"""
+    logger.warning(
+        "api.request.validation_error",
+        path=str(request.url),
+        method=request.method,
+        client=(request.client.host if request.client else None),
+        errors=[e for e in exc.errors()],
+    )
+    return JSONResponse(
+        status_code=422,
+        content={
+            "success": False,
+            "error": "请求参数校验失败",
+            "details": exc.errors(),
+        },
+    )
+
+
 @app.post("/message")
-async def handle_message(request: MessageRequest):
+async def handle_message(req: Request, response: Response, payload: MessageRequest):
     """处理消息 - 核心端点（用于测试或直接API调用）"""
+    # 生成本次请求的 request_id 以便端到端回溯
+    import uuid
+    request_id = str(uuid.uuid4())
+
+    # 记录请求到达
+    try:
+        logger.info(
+            "api.message.in",
+            path=str(req.url),
+            method=req.method,
+            client=(req.client.host if req.client else None),
+            user_id=payload.user_id,
+            thread_id=(payload.thread_id or payload.user_id),
+            request_id=request_id,
+            content_preview=(payload.content[:200] if isinstance(payload.content, str) else None),
+        )
+    except Exception:
+        pass
+
     # 处理消息 - 通过 API 调用的消息没有特定渠道
     response = await ai_engine.process_message(
-        content=request.content,
-        user_id=request.user_id,
-        context={"channel": "api", "thread_id": request.thread_id or request.user_id}
+        content=payload.content,
+        user_id=payload.user_id,
+        context={
+            "channel": "api",
+            "thread_id": payload.thread_id or payload.user_id,
+            "message_id": request_id,
+        }
     )
-    
-    return {
+
+    # 设置回执头部，方便客户端与日志对齐
+    try:
+        resp_obj = {
         "success": True,
-        "response": response
+        "response": response,
+        "message_id": request_id,
     }
+        # 将 request_id 也放在响应头
+        from fastapi.datastructures import Headers
+        resp_headers = Headers({"X-Request-Id": request_id})
+        # FastAPI Response 对象直接赋值 headers
+        response_headers = dict(response.headers)
+        response_headers.update(dict(resp_headers))
+        response.headers.clear()
+        for k, v in response_headers.items():
+            try:
+                response.headers[k] = v
+            except Exception:
+                pass
+        return resp_obj
+    except Exception:
+        # 兜底返回
+        return {
+            "success": True,
+            "response": response,
+            "message_id": request_id,
+        }
 
 
 @app.get("/")

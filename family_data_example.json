@@ -1,26 +1,343 @@
 {
-  "source": "example",
+  "source": "enhanced_example",
   "username": "family_default",
   "threema_id": "YOUR_THREEMA_ID",
+  
   "family_members": [
-    {"name": "大女儿", "role": "daughter", "birthday": "2016-05-20", "notes": "喜欢画画"},
-    {"name": "二女儿", "role": "daughter", "birthday": "2019-09-10", "notes": "花粉过敏"},
-    {"name": "儿子", "role": "son", "birthday": "2022-01-15", "notes": "作息规律，早睡"},
-    {"name": "妻子", "role": "mother", "notes": "负责日常采买"},
-    {"name": "我", "role": "father", "notes": "预算关注者"}
+    {
+      "name": "大女儿",
+      "role": "daughter", 
+      "birthday": "2016-05-20",
+      "age_calculated": true,
+      "notes": "喜欢画画，性格活泼，有创造力",
+      "preferences": {
+        "food": ["水果", "酸奶", "面条"],
+        "activities": ["画画", "看动画片", "玩积木"],
+        "bedtime": "20:30"
+      },
+      "health": {
+        "allergies": [],
+        "last_checkup": "2024-06-15",
+        "vaccination_status": "up_to_date",
+        "growth_tracking": true
+      },
+      "education": {
+        "school": "XX小学",
+        "grade": "小学一年级",
+        "teacher": "李老师"
+      }
+    },
+    {
+      "name": "二女儿",
+      "role": "daughter",
+      "birthday": "2019-09-10", 
+      "age_calculated": true,
+      "notes": "花粉过敏，比较内向但很细心",
+      "preferences": {
+        "food": ["粥", "蒸蛋", "香蕉"],
+        "activities": ["看书", "拼图", "听故事"],
+        "bedtime": "20:00"
+      },
+      "health": {
+        "allergies": ["花粉", "柳絮"],
+        "medications": ["抗过敏药"],
+        "last_checkup": "2024-07-10",
+        "vaccination_status": "up_to_date",
+        "growth_tracking": true
+      },
+      "education": {
+        "school": "XX幼儿园",
+        "class": "大班",
+        "teacher": "王老师"
+      }
+    },
+    {
+      "name": "儿子",
+      "role": "son",
+      "birthday": "2022-01-15",
+      "age_calculated": true,
+      "notes": "作息规律，早睡，喜欢音乐",
+      "preferences": {
+        "food": ["奶粉", "米粉", "水果泥"],
+        "activities": ["听音乐", "看移动玩具", "户外散步"],
+        "bedtime": "19:30"
+      },
+      "health": {
+        "allergies": [],
+        "last_checkup": "2024-08-01",
+        "vaccination_status": "scheduled",
+        "next_vaccine": "2024-09-15",
+        "growth_tracking": true
+      },
+      "development": {
+        "milestones": ["会走路", "会说简单词语"],
+        "next_expected": "更多词汇"
+      }
+    },
+    {
+      "name": "妻子",
+      "role": "mother",
+      "notes": "负责日常采买，关注营养搭配",
+      "preferences": {
+        "responsibilities": ["采买", "烹饪", "孩子健康管理"],
+        "shopping_habits": ["周末集中采购", "关注打折信息"]
+      },
+      "health": {
+        "last_checkup": "2024-05-20",
+        "health_focus": ["睡眠不足", "需要更多休息时间"]
+      }
+    },
+    {
+      "name": "我",
+      "role": "father",
+      "notes": "预算关注者，技术背景",
+      "preferences": {
+        "responsibilities": ["财务管理", "技术支持", "教育规划"],
+        "tracking_habits": ["记账", "数据分析", "长期规划"]
+      },
+      "work": {
+        "schedule": "工作日忙碌",
+        "available_time": "晚上和周末"
+      }
+    }
   ],
+  
   "preferences": [
-    {"content": "餐饮预算每月 3000 元", "category": "budget", "target": "food", "amount": 3000, "currency": "CNY"},
-    {"content": "健康记录单位：厘米/千克", "category": "health_unit", "height_unit": "cm", "weight_unit": "kg"}
+    {
+      "content": "餐饮预算每月 3000 元，注重营养均衡",
+      "category": "budget",
+      "target": "food",
+      "amount": 3000,
+      "currency": "CNY",
+      "priority": "high",
+      "tracking": true
+    },
+    {
+      "content": "教育投资预算每月 2000 元",
+      "category": "budget", 
+      "target": "education",
+      "amount": 2000,
+      "currency": "CNY",
+      "priority": "high"
+    },
+    {
+      "content": "健康记录单位：厘米/千克，定期体检",
+      "category": "health_unit",
+      "height_unit": "cm",
+      "weight_unit": "kg",
+      "tracking_frequency": "monthly"
+    },
+    {
+      "content": "作息时间管理：孩子们早睡，大人11点前休息",
+      "category": "lifestyle",
+      "bedtime_children": "20:30",
+      "bedtime_adults": "23:00"
+    },
+    {
+      "content": "节约原则：避免冲动消费，货比三家",
+      "category": "financial_habits",
+      "strategies": ["比价", "等待期", "需求评估"]
+    }
   ],
+  
   "important_info": [
-    {"content": "家门钥匙放在玄关抽屉", "tag": "keys_location"},
-    {"content": "家庭 Wi-Fi SSID=HomeWiFi，密码=12345678", "tag": "wifi_password", "ssid": "HomeWiFi"}
+    {
+      "content": "家门钥匙放在玄关抽屉最里面",
+      "tag": "keys_location",
+      "location": "玄关抽屉",
+      "updated": "2024-08-01"
+    },
+    {
+      "content": "家庭 Wi-Fi SSID=HomeWiFi，密码=12345678",
+      "tag": "wifi_password", 
+      "ssid": "HomeWiFi",
+      "password": "12345678",
+      "security": "WPA2"
+    },
+    {
+      "content": "应急药品放在主卧衣柜上层",
+      "tag": "emergency_supplies",
+      "location": "主卧衣柜上层",
+      "items": ["退烧药", "创可贴", "体温计", "抗过敏药"]
+    },
+    {
+      "content": "重要证件放在书房保险柜",
+      "tag": "important_documents",
+      "location": "书房保险柜",
+      "items": ["身份证复印件", "户口本", "疫苗接种证"]
+    }
   ],
+  
   "contacts": [
-    {"content": "小儿科医生：王医生 13800000000", "name": "王医生", "type": "doctor", "department": "pediatrics"},
-    {"content": "班主任老师电话：138xxxx1234", "name": "班主任", "type": "teacher", "phone": "138xxxx1234"}
+    {
+      "content": "小儿科医生：王医生 13800000000，XX医院",
+      "name": "王医生",
+      "type": "doctor",
+      "department": "pediatrics",
+      "hospital": "XX医院",
+      "phone": "13800000000",
+      "speciality": ["儿童常见病", "疫苗接种"]
+    },
+    {
+      "content": "大女儿班主任：李老师 138xxxx1234",
+      "name": "李老师", 
+      "type": "teacher",
+      "phone": "138xxxx1234",
+      "school": "XX小学",
+      "grade": "一年级"
+    },
+    {
+      "content": "二女儿老师：王老师 138xxxx5678",
+      "name": "王老师",
+      "type": "teacher", 
+      "phone": "138xxxx5678",
+      "school": "XX幼儿园",
+      "class": "大班"
+    },
+    {
+      "content": "家政服务：张阿姨 139xxxx9999",
+      "name": "张阿姨",
+      "type": "domestic_helper",
+      "phone": "139xxxx9999",
+      "services": ["清洁", "整理"],
+      "schedule": "每周二"
+    },
+    {
+      "content": "紧急联系人：姥姥 136xxxx7777",
+      "name": "姥姥",
+      "type": "emergency_contact",
+      "phone": "136xxxx7777",
+      "relationship": "maternal_grandmother"
+    }
   ],
-  "address": {"city": "北京", "district": "海淀"},
-  "budget": {"currency": "CNY"}
+  
+  "address": {
+    "city": "北京",
+    "district": "海淀",
+    "neighborhood": "XX小区",
+    "nearby_facilities": {
+      "hospital": "XX医院（2公里）",
+      "school": "XX小学（500米）",
+      "kindergarten": "XX幼儿园（800米）", 
+      "supermarket": "XX超市（200米）",
+      "park": "XX公园（1公里）"
+    }
+  },
+  
+  "budget": {
+    "currency": "CNY",
+    "monthly_categories": {
+      "food": 3000,
+      "education": 2000,
+      "healthcare": 1000,
+      "utilities": 800,
+      "transportation": 600,
+      "entertainment": 500,
+      "clothing": 800,
+      "household": 400,
+      "emergency": 1000
+    },
+    "annual_goals": {
+      "education_fund": 50000,
+      "emergency_fund": 100000,
+      "travel": 20000
+    },
+    "tracking_rules": {
+      "alert_threshold": 0.8,
+      "review_frequency": "weekly",
+      "categories_to_track": ["food", "education", "healthcare"]
+    }
+  },
+  
+  "routines": [
+    {
+      "type": "daily",
+      "name": "晨起流程",
+      "time": "07:00",
+      "description": "孩子们起床、洗漱、早餐",
+      "participants": ["大女儿", "二女儿", "儿子"]
+    },
+    {
+      "type": "daily", 
+      "name": "晚间流程",
+      "time": "19:30",
+      "description": "晚餐后、洗澡、睡前故事",
+      "participants": ["全家"]
+    },
+    {
+      "type": "weekly",
+      "name": "周末采购",
+      "day": "Saturday",
+      "time": "09:00",
+      "description": "全家一周食材和生活用品采购",
+      "responsible": "妻子"
+    },
+    {
+      "type": "monthly",
+      "name": "体检记录",
+      "description": "记录孩子们的身高体重，更新成长档案",
+      "participants": ["大女儿", "二女儿", "儿子"]
+    }
+  ],
+  
+  "seasonal_info": [
+    {
+      "season": "spring",
+      "health_focus": ["二女儿花粉过敏预防", "春季感冒预防"],
+      "activities": ["户外活动增加", "春游计划"]
+    },
+    {
+      "season": "summer", 
+      "health_focus": ["防晒", "多喝水", "避免中暑"],
+      "activities": ["游泳", "避暑", "夏令营"]
+    },
+    {
+      "season": "autumn",
+      "health_focus": ["添衣保暖", "秋季干燥护理"],
+      "activities": ["开学准备", "户外运动"]
+    },
+    {
+      "season": "winter",
+      "health_focus": ["流感预防", "室内空气质量"],
+      "activities": ["室内游戏", "春节准备"]
+    }
+  ],
+  
+  "growth_milestones": {
+    "大女儿": {
+      "academic": ["识字量达标", "数学计算", "阅读理解"],
+      "social": ["与同学相处", "独立性培养"],
+      "physical": ["身高体重正常", "运动协调性"]
+    },
+    "二女儿": {
+      "academic": ["拼音学习", "简单数数", "色彩认知"],
+      "social": ["克服内向", "表达能力"],
+      "physical": ["过敏控制", "体质增强"]
+    },
+    "儿子": {
+      "development": ["语言发展", "运动技能", "社交启蒙"],
+      "health": ["疫苗接种", "营养摄入", "睡眠规律"]
+    }
+  },
+  
+  "family_goals": {
+    "short_term": [
+      "建立更好的作息规律",
+      "优化营养搭配", 
+      "增加亲子互动时间"
+    ],
+    "long_term": [
+      "孩子们健康成长",
+      "教育投资规划",
+      "家庭财务稳定",
+      "创造更多美好回忆"
+    ]
+  },
+  
+  "notes": {
+    "data_sensitivity": "此文件包含隐私信息，不应提交至版本控制",
+    "last_updated": "2024-08-01",
+    "update_frequency": "根据家庭变化定期更新",
+    "ai_usage": "AI助手可以使用这些信息提供个性化建议和提醒"
+  }
 }

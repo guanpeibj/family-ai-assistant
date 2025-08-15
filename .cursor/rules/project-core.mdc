@@ -16,7 +16,7 @@ FAA 是一个家庭 AI 助手，专为解决家庭日常需求而设计：
 ```
 用户 → Threema/邮件 → FastAPI → AI Engine → MCP Tools → PostgreSQL
                                       ↓
-                                 OpenAI API
+                          OpenAI API / Other AI
 ```
 
 ### 2. AI 驱动决策
@@ -27,12 +27,12 @@ FAA 是一个家庭 AI 助手，专为解决家庭日常需求而设计：
 ### 3. 数据模型设计
 - 使用通用的 `memories` 表存储所有信息
 - `ai_understanding` JSONB 字段让 AI 自由存储理解的内容
-- 保留精确查询字段（amount, occurred_at）用于统计分析
+- 数据模型通用性的同时，对一些数据支持精确查询和储存
 - 混合存储：语义向量 + 结构化数据
 
 ### 4. MCP 工具设计
 - 工具完全泛化，不包含业务逻辑
-- 只提供基础能力：store, search, aggregate, schedule_reminder
+- 只提供基础能力：store, search, aggregate, schedule_reminder等等
 - 业务逻辑完全由 AI 在运行时决定
 
 ## 开发原则
@@ -53,6 +53,5 @@ FAA 是一个家庭 AI 助手，专为解决家庭日常需求而设计：
 ## 文件引用
 - ai驱动：[ai-evolution.mdc](mdc:ai-evolution.mdc)
 - 项目构想：[readme.MD](mdc:readme.MD)
-- 第一版总结：[edition1.MD](mdc:edition1.MD)
 - 架构文档：[ARCHITECTURE.md](mdc:ARCHITECTURE.md)
 - 部署文档：[DEPLOY.md](mdc:DEPLOY.md)

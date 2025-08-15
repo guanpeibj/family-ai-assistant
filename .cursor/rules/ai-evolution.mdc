@@ -58,7 +58,10 @@ ai_understanding = {
 }
 ```
 
-#### 2.2 工具的通用性
+#### 2.2 部分数据结构的准确查/存
+对一些需要精确的数据（账目信息、 健康信息），要精确查/存
+
+#### 2.3 工具的通用性
 ```python
 # 工具不限制 AI 的使用方式
 async def store(content, ai_data, user_id):
@@ -68,7 +71,7 @@ async def store(content, ai_data, user_id):
     # 工具不变，用途由 AI 决定
 ```
 
-#### 2.3 交互的灵活性
+#### 2.4 交互的灵活性
 ```python
 # 不预设对话模式
 async def process_message(content, user_id):

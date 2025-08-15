@@ -3,8 +3,10 @@ Prompt版本管理器 - 支持动态加载和切换prompt版本
 """
 import yaml
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import structlog
+import httpx
+import asyncio
 
 logger = structlog.get_logger(__name__)
 
@@ -12,14 +14,16 @@ logger = structlog.get_logger(__name__)
 class PromptManager:
     """管理不同版本的AI提示词"""
     
-    def __init__(self, prompt_file: str = "prompts/family_assistant_prompts.yaml"):
+    def __init__(self, prompt_file: str = "prompts/family_assistant_prompts.yaml", mcp_url: str = None):
         self.prompt_file = prompt_file
         self.prompts: Dict[str, Any] = {}
         self.current_version: str = "v1_basic"
+        self.mcp_url = mcp_url or os.getenv('MCP_SERVER_URL', 'http://faa-mcp:8000')
+        self._cached_tools: Optional[List[Dict[str, Any]]] = None
         self._load_prompts()
     
     def _load_prompts(self):
-        """从YAML文件加载prompts"""
+        """从YAML文件加载prompts（支持 blocks/inherits/vars 拼装）。"""
         try:
             # 获取项目根目录
             project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,89 +35,94 @@ class PromptManager:
                 return
             
             with open(prompt_path, 'r', encoding='utf-8') as f:
-                data = yaml.safe_load(f)
-            
-            self.prompts = data.get('prompts', {})
-            self.current_version = data.get('current', 'v1_basic')
-            
-            # 验证当前版本是否存在
-            if self.current_version not in self.prompts:
-                logger.warning(f"Current version {self.current_version} not found, using v1_basic")
-                self.current_version = 'v1_basic'
-            
+                data = yaml.safe_load(f) or {}
+
+            raw_prompts = data.get('prompts', {}) or {}
+            current = data.get('current', 'v1_basic')
+            vars_map = data.get('vars', {}) or {}
+            blocks = data.get('blocks', {}) or {}
+
+            def _assemble_text(block_keys: list[str] | None, fallback_key: str | None = None) -> str:
+                if block_keys and isinstance(block_keys, list):
+                    parts: list[str] = []
+                    for k in block_keys:
+                        txt = blocks.get(k, '')
+                        if txt:
+                            parts.append(str(txt).strip())
+                    return "\n\n".join(parts).strip()
+                if fallback_key and blocks.get(fallback_key):
+                    return str(blocks[fallback_key]).strip()
+                return ''
+
+            def _interpolate(text: str) -> str:
+                # 极简模板替换：{{KEY}} -> vars_map[KEY]
+                if not text:
+                    return text
+                out = text
+                for k, v in vars_map.items():
+                    out = out.replace(f"{{{{{k}}}}}", str(v))
+                return out
+
+            assembled: dict[str, dict[str, str]] = {}
+            # 先浅复制原 prompts，用于兼容旧结构
+            for name, cfg in raw_prompts.items():
+                assembled[name] = {
+                    'system': cfg.get('system', ''),
+                    'understanding': cfg.get('understanding', ''),
+                    'response_generation': cfg.get('response_generation', ''),
+                    'response_clarification': cfg.get('response_clarification', ''),
+                    'response_normal': cfg.get('response_normal', ''),
+                    'tool_planning': cfg.get('tool_planning', ''),
+                }
+            # 处理 blocks/inherits 结构
+            for name, cfg in raw_prompts.items():
+                parent = cfg.get('inherits')
+                base = dict(assembled.get(parent, {})) if parent else {}
+                # 按 blocks 列表拼接
+                sys_txt = _assemble_text(cfg.get('system_blocks'), None)
+                und_txt = _assemble_text(cfg.get('understanding_blocks'), None)
+                rsp_txt = _assemble_text(cfg.get('response_blocks'), None)
+                rsp_clar_txt = _assemble_text(cfg.get('response_clarification_blocks'), None)
+                rsp_norm_txt = _assemble_text(cfg.get('response_normal_blocks'), None)
+                tpl_txt = _assemble_text(cfg.get('tool_planning_blocks'), None)
+                if sys_txt:
+                    base['system'] = sys_txt
+                if und_txt:
+                    base['understanding'] = und_txt
+                if rsp_txt:
+                    base['response_generation'] = rsp_txt
+                if rsp_clar_txt:
+                    base['response_clarification'] = rsp_clar_txt
+                if rsp_norm_txt:
+                    base['response_normal'] = rsp_norm_txt
+                if tpl_txt:
+                    base['tool_planning'] = tpl_txt
+                # 模板变量替换
+                for k in list(base.keys()):
+                    base[k] = _interpolate(base.get(k, ''))
+                assembled[name] = base
+
+            self.prompts = assembled
+            self.current_version = current if current in self.prompts else 'v1_basic'
+            if self.current_version != current:
+                logger.warning(f"Current version {current} not found, fallback to v1_basic")
             logger.info(f"Loaded prompt version: {self.current_version}")
-            
+            logger.info(f"current prompts: {self.prompts}")
+
         except Exception as e:
             logger.error(f"Error loading prompts: {e}")
             self._use_defaults()
     
     def _use_defaults(self):
-        """使用默认的prompts"""
+        """当YAML文件不可用时，使用最小化的兜底prompts"""
+        logger.warning("Using minimal fallback prompts - YAML configuration recommended")
         self.prompts = {
             'v1_basic': {
-                'name': '默认版本',
-                'system': """
-你是一个贴心的家庭AI助手，专门服务于一个有多个孩子的家庭。
-
-你的核心能力：
-1. 记账管理：识别并记录家庭收支，提供统计分析和预算建议
-2. 健康追踪：记录家人健康数据（身高、体重、疫苗等），跟踪变化趋势
-3. 杂事提醒：管理日常事务，及时提醒重要事项
-
-回复原则：
-- 温馨友好，像家人般关怀
-- 简洁实用，不说废话
-- 主动提供有价值的统计和建议
-- 记住这是一个有多个孩子的家庭，关注协助和支持妈妈
-
-信息理解指南：
-- "今天/昨天/上周"等时间表达要转换为具体日期
-- 识别家庭成员：儿子、女儿（大女儿、二女儿）、妻子、我/老公
-- 支出自动分类：餐饮、购物、交通、医疗、教育、日用品等
-- 如果提到"更新"或"改为"，要覆盖之前的记录
-
-你有以下工具可以使用：
-- store: 存储任何重要信息（支出、收入、健康数据、杂事等）
-- search: 查找历史记录
-- aggregate: 统计分析数据（求和、计数、平均值等）
-- schedule_reminder: 设置提醒
-- get_pending_reminders: 查看待发送提醒
-- mark_reminder_sent: 标记提醒已发送
-多模态与附件使用指南：
-- 你可能会收到 context.attachments 列表，其中包含 type/mime/path/size/original_name 以及衍生信息（transcription/ocr_text/vision_summary）。
-- 优先利用 transcription/ocr_text/vision_summary 来理解图片/语音的含义；当信息不足时，先澄清再行动。
-- 对于来自同一对话线程的多轮补充，请使用 thread_id 进行关联。
-""",
+                'name': '兜底版本',
+                'system': '你是一个家庭AI助手，帮助管理家庭事务。请查阅数据库获取家庭成员信息。',
                 'understanding': '',
                 'response_generation': '',
-                'tool_planning': """
-你是一个工具编排器。根据理解结果与上下文，产出一个 JSON：{ "steps": [ {"tool": string, "args": object} ... ] }。
-
-可用工具：
-- store(args: {content, ai_data, user_id?, embedding?})
-- search(args: {query?, user_id?, filters?, query_embedding?})
-- aggregate(args: {user_id?, operation, field?, filters?})
-- schedule_reminder(args: {memory_id, remind_at})
-- get_pending_reminders(args: {user_id})
-- mark_reminder_sent(args: {reminder_id})
- - render_chart(args: {type, title, x, series, style?})
-
-通用规则：
-1) 仅输出JSON，不要解释。
-2) 如需存储，ai_data 应合并理解出的 entities，并尽量包含 occurred_at(ISO)。如上下文含 thread_id，写入 ai_data.thread_id。
-3) 若后续需要对刚存储的记录设置提醒，可在 schedule_reminder.args.memory_id 使用占位符 "$LAST_STORE_ID"。
-4) 查询/聚合时，请在 filters 中明确 date_from/date_to/min_amount/max_amount/person/metric 等条件；如需语义检索可给出 query。
-5) 若无需动作，返回 {"steps": []}。
-
-统计与图表策略：
-- 当用户请求“趋势/汇总/占比/对比”时，先使用 aggregate 获取数据。
-- 时间序列请使用 filters.group_by=day/week/month；非时间序列可用 filters.group_by_ai_field=某个 ai 字段（如 category/person）。
-- 图表类型选择：趋势→line；对比→bar；占比→pie。
-- 渲染图表时，x 为横轴标签（时间或类别），series 为数据序列数组（支持多条）。
-
-检索回退策略：
-- 无法生成查询向量时，允许仅用 filters 或简短 query，底层可能使用 trigram 近似匹配；必要时分步组合多次 search。
-"""
+                'tool_planning': '根据理解结果决定使用哪些工具。输出 JSON: {"steps": [{"tool": "store", "args": {...}}]}',
             }
         }
         self.current_version = 'v1_basic'
@@ -133,10 +142,155 @@ class PromptManager:
         current = self.prompts.get(self.current_version, {})
         return current.get('response_generation', '')
     
+    def get_response_clarification_prompt(self) -> str:
+        """获取澄清询问专用提示词（如定义）"""
+        current = self.prompts.get(self.current_version, {})
+        return current.get('response_clarification', '')
+    
+    def get_response_normal_prompt(self) -> str:
+        """获取正常回复专用提示词（如定义）"""
+        current = self.prompts.get(self.current_version, {})
+        return current.get('response_normal', '')
+    
     def get_tool_planning_prompt(self) -> str:
         """获取工具编排提示词"""
         current = self.prompts.get(self.current_version, {})
         return current.get('tool_planning', '')
+    
+    def get_dynamic_prompt(self, prompt_name: str, **kwargs) -> str:
+        """获取动态格式化的提示词"""
+        # 从 blocks 中获取指定的 prompt 模板
+        try:
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            prompt_path = os.path.join(project_root, self.prompt_file)
+            
+            if not os.path.exists(prompt_path):
+                return ""
+            
+            with open(prompt_path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f) or {}
+            
+            blocks = data.get('blocks', {}) or {}
+            template = blocks.get(prompt_name, '')
+            
+            if template and kwargs:
+                return template.format(**kwargs)
+            return template
+            
+        except Exception as e:
+            logger.error(f"Error getting dynamic prompt {prompt_name}: {e}")
+            return ""
+    
+    def get_message_understanding_prompt(self, **kwargs) -> str:
+        """获取消息理解提示词"""
+        return self.get_dynamic_prompt('message_understanding', **kwargs)
+    
+    def get_clarification_task_prompt(self, **kwargs) -> str:
+        """获取澄清任务提示词"""
+        return self.get_dynamic_prompt('clarification_response_task', **kwargs)
+    
+    def get_clarification_user_prompt(self, **kwargs) -> str:
+        """获取澄清用户提示词"""
+        return self.get_dynamic_prompt('clarification_user_prompt', **kwargs)
+    
+    def get_normal_task_prompt(self, **kwargs) -> str:
+        """获取正常回复任务提示词"""
+        return self.get_dynamic_prompt('normal_response_task', **kwargs)
+    
+    def get_normal_user_prompt(self, **kwargs) -> str:
+        """获取正常回复用户提示词"""
+        return self.get_dynamic_prompt('normal_response_user_prompt', **kwargs)
+    
+    async def _fetch_mcp_tools(self) -> List[Dict[str, Any]]:
+        """从 MCP server 获取可用工具列表"""
+        if self._cached_tools is not None:
+            return self._cached_tools
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(f"{self.mcp_url}/tools", timeout=5.0)
+                response.raise_for_status()
+                data = response.json()
+                tools = data.get('tools', [])
+                self._cached_tools = tools
+                logger.info(f"Fetched {len(tools)} tools from MCP server")
+                return tools
+        except Exception as e:
+            logger.warning(f"Failed to fetch tools from MCP server: {e}")
+            return []
+    
+    def _format_tool_list(self, tools: List[Dict[str, Any]]) -> str:
+        """格式化工具列表为 prompt 文本"""
+        if not tools:
+            return "工具列表获取失败，请检查 MCP server 连接"
+        
+        lines = []
+        for tool in tools:
+            name = tool.get('name', 'unknown')
+            desc = tool.get('description', '')
+            params = tool.get('parameters', [])
+            
+            # 格式化参数列表
+            if params:
+                param_str = ', '.join(params)
+                lines.append(f"- {name}: {desc} (参数: {param_str})")
+            else:
+                lines.append(f"- {name}: {desc}")
+        
+        return '\n'.join(lines)
+    
+    def _format_tool_specification(self, tools: List[Dict[str, Any]]) -> str:
+        """格式化详细的工具规格说明"""
+        if not tools:
+            return "工具规格获取失败，请检查 MCP server 连接"
+        
+        lines = []
+        for tool in tools:
+            name = tool.get('name', 'unknown')
+            params = tool.get('parameters', [])
+            
+            if params:
+                param_str = '{' + ', '.join(params) + '}'
+                lines.append(f"- {name}(args: {param_str})")
+            else:
+                lines.append(f"- {name}()")
+        
+        return '\n'.join(lines)
+    
+    async def get_system_prompt_with_tools(self) -> str:
+        """获取包含动态工具信息的系统提示词"""
+        base_prompt = self.get_system_prompt()
+        
+        # 获取工具信息
+        tools = await self._fetch_mcp_tools()
+        tool_list = self._format_tool_list(tools)
+        
+        # 替换工具列表占位符
+        if '{{DYNAMIC_TOOLS}}' in base_prompt:
+            return base_prompt.replace('{{DYNAMIC_TOOLS}}', tool_list)
+        
+        # 如果没有占位符，直接在末尾添加
+        return base_prompt + f"\n\n你有以下工具可以使用：\n{tool_list}"
+    
+    async def get_tool_planning_prompt_with_tools(self) -> str:
+        """获取包含动态工具信息的工具编排提示词"""
+        base_prompt = self.get_tool_planning_prompt()
+        
+        # 获取工具信息
+        tools = await self._fetch_mcp_tools()
+        tool_spec = self._format_tool_specification(tools)
+        
+        # 替换工具规格占位符
+        if '{{DYNAMIC_TOOL_SPECS}}' in base_prompt:
+            return base_prompt.replace('{{DYNAMIC_TOOL_SPECS}}', tool_spec)
+        
+        # 如果没有占位符，直接在开头添加
+        return f"可用工具：\n{tool_spec}\n\n{base_prompt}"
+    
+    def clear_tools_cache(self):
+        """清除工具缓存，强制重新获取"""
+        self._cached_tools = None
+        logger.info("Cleared tools cache")
     
     def switch_version(self, version: str) -> bool:
         """切换到指定版本的prompt"""

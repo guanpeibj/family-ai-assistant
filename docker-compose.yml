@@ -24,7 +24,7 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     ports:
-      - "8000:8000"
+      - "8001:8000"
     environment:
       - DATABASE_URL=postgresql://faa:${POSTGRES_PASSWORD:-faa_password}@postgres:5432/family_assistant
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -50,7 +50,7 @@ services:
     volumes:
       - ./src:/app/src
       - media_data:/data/media
-    command: sh -lc "/app/.venv/bin/alembic upgrade head && /app/.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload"
+    command: sh -c "/app/.venv/bin/alembic upgrade head && /app/.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload"
 
   faa-mcp:
     build:
