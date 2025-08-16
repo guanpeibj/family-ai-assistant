@@ -236,3 +236,70 @@ docker compose exec faa-api bash -lc 'alembic upgrade head'
 # 回退一版
 docker compose exec faa-api bash -lc 'alembic downgrade -1'
 ```
+
+
+## 部署与性能调优（建议）
+
+以下建议帮助你将 FAA 在生产环境稳定运行，并在数据量增长时保持“快且准”。
+
+- 环境变量（按需设置）
+  - `DATABASE_URL`: PostgreSQL 连接，例如 `postgresql://faa:faa@db:5432/family_assistant`
+  - `MCP_SERVER_URL`: MCP HTTP 包装器地址，例如 `http://faa-mcp:8000`
+  - `MCP_STRICT_MODE`: 是否启用严格模式（`true/false`）。生产环境建议 `true`，禁用“模拟返回”，失败要显式暴露
+  - `MCP_TOOLS_CACHE_TTL`: MCP 工具列表缓存秒数（默认 1200）
+  - `EMB_CACHE_MAX_ITEMS`: 进程级 embedding 缓存最大条数（默认 1000）
+  - `EMB_CACHE_TTL_SECONDS`: 进程级 embedding 缓存 TTL（默认 3600）
+  - `MEDIA_ROOT`: 图表渲染输出目录（默认 `/data/media`）
+  - OpenAI/LLM 相关：模型、Key、代理等（见 `src/core/config.py` 与部署环境）
+
+- 数据库初始化与索引
+  - 启用扩展：`pgvector`、`pg_trgm`、`uuid-ossp`、`pgcrypto`
+  - 执行 `scripts/init_db.sql` 或依赖服务启动时的“幂等索引创建”（两者都安全可用）
+  - 关键索引（建议必须有）：
+    - `memories.embedding` 的向量索引（ivfflat/hnsw，cosine/l2 视版本而定）
+    - `memories.content` 的 trigram GIN 索引（支持 `%`/similarity 排序）
+    - `ai_understanding` 的 JSONB GIN（jsonb_path_ops），配合 `@>` 包含查询
+    - 表达式索引：`(ai_understanding->>'thread_id'/'type'/'channel')`
+    - 组合索引：`((ai_understanding->>'thread_id'), occurred_at DESC)`、`(user_id, occurred_at DESC)`
+    - 可选：当 `ai_understanding.external_id` 存在时，对 `(user_id, external_id)` 建“部分唯一索引”实现软去重
+  - 例：见 `scripts/init_db.sql`；服务启动时 `mcp-server/generic_mcp_server.py` 也会幂等确保
+
+- 查询与性能建议
+  - 始终在 `search/aggregate` 中带上 `filters.limit` 与合理的日期范围（`date_from/date_to`），避免宽扫
+  - 语义检索优先向量；失败降级为 trigram/时间排序
+  - 共享线程（`shared_thread=true`）必须附带 `thread_id`，并默认强制 `limit ≤ 30`
+  - 聚合（`aggregate`）优先使用 `group_by=day|week|month` 或 `group_by_ai_field`，尽量减少多次往返
+  - 定期执行 `VACUUM ANALYZE`，大表增长后考虑提高向量索引的 `lists` 或使用 HNSW（若 pgvector 版本支持）
+
+- 缓存与时间预算
+  - 工具清单缓存：`/tools` 结果在引擎侧做 10-20 分钟缓存，减少 prompt 注入的开销
+  - Embedding 缓存：
+    - trace 级缓存：一条消息内重复文本不重复向量化
+    - 进程级 LRU 缓存：默认 1000 条、1 小时 TTL，可通过环境变量调节
+  - 工具调用超时：按工具类型使用时间预算（store≈2s、search/aggregate≈3s、batch≈5s、render_chart≈6s），避免单次请求卡死
+
+- 监控与可观测性
+  - 结构化日志包含：工具名、耗时、是否向量/三元组、结果数量等
+  - 建议开启 `pg_stat_statements` 以便识别慢 SQL 与缺索引路径
+  - 关注指标：每次消息的 MCP 调用次数、耗时分布、embedding 缓存命中率、向量/Trigram 命中比
+
+- 幂等与软更新（重要实践）
+  - 定义：同一操作重复执行，其最终效果只有一次，或多次执行与执行一次效果等价
+  - 在 FAA 中的做法：
+    - 存储去重：对可识别的外部数据/重复导入，使用 `ai_understanding.external_id/source/version` 标记，先 `search(filters.jsonb_equals={external_id,type})` 检查是否已存在；存在则跳过或 `update_memory_fields` 浅合并，避免重复
+    - 提醒设置：如依赖上一条 `store`，以 `$LAST_STORE_ID` 传递，LLM 侧不重复发起同一提醒；必要时也可在 `ai_understanding` 建 `reminder_key` 并在客户端侧做去重
+    - 发送标记：`mark_reminder_sent` 为幂等操作（多次调用效果一致）
+    - 软删除：通过 `soft_delete` 将 `ai_understanding.deleted=true`，重复调用无副作用
+  - 设计建议：
+    - 在 LLM 工具规划中约定：如可确定唯一性，`store.ai_data` 附带 `external_id/source/version`，并优先走“先查后存/更”
+    - 数据模型保持开放，允许追加新字段；不要依赖严格 schema 来实现业务判断
+
+- 故障与降级策略
+  - 生产启用 `MCP_STRICT_MODE=true`，明确失败而非“模拟成功”
+  - 搜索失败时：退化为 `filters` 与 trigram/时间排序；统计失败时：返回基于样本的定性描述并附上下一步建议
+  - 回复层面：先说明已执行的操作（或失败/降级情况），再给要点和下一步
+
+- 资源与扩展
+  - 连接池：`asyncpg` 池大小按并发与数据库资源调整（当前 1-10）
+  - 容量规划：图表渲染目录 `MEDIA_ROOT` 注意磁盘清理；定期归档/分区 `chat_turn` 类数据
+  - 可横向扩展 MCP HTTP 层，将 embedding/渲染等重任务分离到异步后台

@@ -4,6 +4,7 @@ Prompt版本管理器 - 支持动态加载和切换prompt版本
 import yaml
 import os
 from typing import Dict, Any, Optional, List
+import json
 import structlog
 import httpx
 import asyncio
@@ -200,6 +201,13 @@ class PromptManager:
     def get_normal_user_prompt(self, **kwargs) -> str:
         """获取正常回复用户提示词"""
         return self.get_dynamic_prompt('normal_response_user_prompt', **kwargs)
+
+    def get_followup_classifier_prompts(self, *, payload: dict) -> tuple[str, str]:
+        """获取跟进分类器的 system/user 提示词。"""
+        system = self.get_dynamic_prompt('followup_classifier_system')
+        # 将 payload 序列化注入 user prompt
+        user = self.get_dynamic_prompt('followup_classifier_user', payload=json.dumps(payload, ensure_ascii=False))
+        return system, user
     
     async def _fetch_mcp_tools(self) -> List[Dict[str, Any]]:
         """从 MCP server 获取可用工具列表"""
@@ -222,18 +230,35 @@ class PromptManager:
     def _format_tool_list(self, tools: List[Dict[str, Any]]) -> str:
         """格式化工具列表为 prompt 文本"""
         if not tools:
-            return "工具列表获取失败，请检查 MCP server 连接"
+            return (
+                "工具列表获取失败，请检查 MCP server 连接。\n"
+                "降级指引：\n"
+                "- 查询：尽量使用 filters.limit + 日期范围；无法获取向量则退化到 trigram 或时间排序。\n"
+                "- 统计：优先尝试 aggregate；报错时使用 search 拉取样本给出定性总结。\n"
+                "- 存储/提醒：确保关键信息齐全后再调用，缺失即先澄清。"
+            )
         
         lines = []
         for tool in tools:
             name = tool.get('name', 'unknown')
             desc = tool.get('description', '')
             params = tool.get('parameters', [])
+            latency = tool.get('x_latency_hint')
+            time_budget = tool.get('x_time_budget')
+            idempotent = (tool.get('x_capabilities') or {}).get('idempotent')
             
             # 格式化参数列表
             if params:
                 param_str = ', '.join(params)
-                lines.append(f"- {name}: {desc} (参数: {param_str})")
+                meta = []
+                if latency:
+                    meta.append(f"延迟:{latency}")
+                if isinstance(time_budget, (int, float)):
+                    meta.append(f"预算:{time_budget}s")
+                if idempotent is not None:
+                    meta.append(f"幂等:{'是' if idempotent else '否'}")
+                meta_str = f" [{' | '.join(meta)}]" if meta else ''
+                lines.append(f"- {name}: {desc} (参数: {param_str}){meta_str}")
             else:
                 lines.append(f"- {name}: {desc}")
         
@@ -248,12 +273,18 @@ class PromptManager:
         for tool in tools:
             name = tool.get('name', 'unknown')
             params = tool.get('parameters', [])
+            failures = tool.get('x_common_failures') or []
+            notes = tool.get('x_notes')
             
             if params:
                 param_str = '{' + ', '.join(params) + '}'
                 lines.append(f"- {name}(args: {param_str})")
             else:
                 lines.append(f"- {name}()")
+            if failures:
+                lines.append(f"  常见失败: {', '.join(failures)}")
+            if notes:
+                lines.append(f"  说明: {notes}")
         
         return '\n'.join(lines)
     

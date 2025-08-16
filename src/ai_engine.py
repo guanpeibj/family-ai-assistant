@@ -38,12 +38,22 @@ class AIEngine:
         self.llm = LLMClient()
         self.mcp_client = None
         self.mcp_url = os.getenv('MCP_SERVER_URL', 'http://faa-mcp:8000')
+        # MCP 严格模式（生产禁用模拟返回）
+        self._mcp_strict_mode: bool = str(os.getenv('MCP_STRICT_MODE', 'true')).lower() in {'1', 'true', 'yes'}
         # 工具调用暂存，用于交互持久化与回溯（按 trace_id 聚合）
         self._tool_calls_by_trace: Dict[str, List[Dict[str, Any]]] = {}
         # HTTP 客户端复用
         self._http_client: Optional[httpx.AsyncClient] = None
+        # 工具规格缓存（含 /tools 版本与生成时间），减少频繁注入
+        self._tool_specs_cache: Dict[str, Any] = {"data": None, "ts": 0.0, "ttl": float(os.getenv('MCP_TOOLS_CACHE_TTL', '1200'))}
         # 每次请求级的嵌入缓存（按 trace_id 划分）
         self._emb_cache_by_trace: Dict[str, Dict[str, List[float]]] = {}
+        # 进程级嵌入 LRU 缓存
+        self._emb_cache_global: Dict[str, Tuple[List[float], float]] = {}
+        self._emb_cache_global_max_items: int = int(os.getenv('EMB_CACHE_MAX_ITEMS', '1000'))
+        self._emb_cache_global_ttl: float = float(os.getenv('EMB_CACHE_TTL_SECONDS', '3600'))
+        # 跟进判断的时间阈值（秒）：超过则倾向视为新主题
+        self._followup_max_gap_seconds: int = 180
         
     async def initialize_mcp(self):
         """初始化MCP客户端连接"""
@@ -74,6 +84,121 @@ class AIEngine:
                 await self._http_client.aclose()
         except Exception:
             pass
+
+    async def _get_tool_specs(self) -> Dict[str, Any]:
+        """获取 MCP 工具规格并缓存，用于动态工具发现与超时预算。"""
+        now = time.time()
+        cache = self._tool_specs_cache
+        ttl = float(cache.get('ttl') or 1200)
+        if cache.get('data') and now - float(cache.get('ts', 0)) < ttl:
+            return cache['data']
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient()
+        try:
+            resp = await self._http_client.get(f"{self.mcp_url}/tools", timeout=3.0)
+            resp.raise_for_status()
+            data = resp.json()
+            self._tool_specs_cache = {"data": data, "ts": now, "ttl": ttl}
+            return data
+        except Exception:
+            # 返回旧缓存或空结构
+            return cache.get('data') or {"tools": []}
+
+    async def _get_tool_names(self) -> List[str]:
+        specs = await self._get_tool_specs()
+        tools = specs.get('tools') or []
+        names = []
+        for t in tools:
+            n = (t or {}).get('name')
+            if isinstance(n, str):
+                names.append(n)
+        return names
+
+    async def _get_tool_time_budget(self, tool_name: str) -> float:
+        """从 /tools 中读取 x_time_budget，未命中则按默认值。单位：秒。"""
+        try:
+            specs = await self._get_tool_specs()
+            for t in specs.get('tools') or []:
+                if t.get('name') == tool_name:
+                    tb = t.get('x_time_budget')
+                    if isinstance(tb, (int, float)):
+                        return float(tb)
+        except Exception:
+            pass
+        # 默认预算
+        defaults = {
+            'store': 2.0,
+            'search': 3.0,
+            'aggregate': 3.0,
+            'schedule_reminder': 2.0,
+            'get_pending_reminders': 3.0,
+            'mark_reminder_sent': 2.0,
+            'batch_store': 5.0,
+            'batch_search': 5.0,
+            'update_memory_fields': 2.0,
+            'soft_delete': 2.0,
+            'reembed_memories': 5.0,
+            'render_chart': 6.0,
+        }
+        return defaults.get(tool_name, 3.0)
+
+    def _emb_global_get(self, key: str) -> Optional[List[float]]:
+        item = self._emb_cache_global.get(key)
+        if not item:
+            return None
+        vec, ts = item
+        if (time.time() - ts) > self._emb_cache_global_ttl:
+            try:
+                self._emb_cache_global.pop(key, None)
+            except Exception:
+                pass
+            return None
+        return vec
+
+    def _emb_global_put(self, key: str, vec: Optional[List[float]]) -> None:
+        if not vec:
+            return
+        # 容量控制（最简单的随机淘汰/先进先出近似）
+        try:
+            if len(self._emb_cache_global) >= self._emb_cache_global_max_items:
+                # pop 任意一个最旧项
+                oldest_key = None
+                oldest_ts = float('inf')
+                for k, (_, ts) in self._emb_cache_global.items():
+                    if ts < oldest_ts:
+                        oldest_key, oldest_ts = k, ts
+                if oldest_key:
+                    self._emb_cache_global.pop(oldest_key, None)
+        except Exception:
+            pass
+        self._emb_cache_global[key] = (vec, time.time())
+
+    async def _get_embedding_cached(self, text: str, trace_id: Optional[str]) -> Optional[List[float]]:
+        if not text:
+            return None
+        # trace 级
+        cache = self._emb_cache_by_trace.get(trace_id or '', {})
+        if text in cache:
+            return cache[text]
+        # 全局级
+        vec = self._emb_global_get(text)
+        if vec is not None:
+            cache[text] = vec
+            if trace_id:
+                self._emb_cache_by_trace[trace_id] = cache
+            return vec
+        # 生成
+        try:
+            embs = await self.llm.embed([text])
+            vec = [float(x) for x in (embs[0] or [])] if embs else None
+        except Exception:
+            vec = None
+        if vec is not None:
+            cache[text] = vec
+            if trace_id:
+                self._emb_cache_by_trace[trace_id] = cache
+            self._emb_global_put(text, vec)
+        return vec
     
     async def process_message(self, content: str, user_id: str, context: Dict[str, Any] = None) -> str:
         """
@@ -125,8 +250,17 @@ class AIEngine:
             # 新流程：先做轻理解以便早停
             understanding = await self._light_understand_message(content, user_id, context, trace_id=trace_id)
 
-            if understanding.get('need_clarification'):
-                # 直接生成澄清回复，省略所有后续步骤
+            # 轻量“跟进”识别与槽位合并（利用最近 2-4 条 chat_turn）
+            understanding, was_followup = await self._maybe_merge_followup(
+                understanding=understanding,
+                content=content,
+                user_id=user_id,
+                context=context,
+                trace_id=trace_id,
+            )
+
+            if understanding.get('need_clarification') and not was_followup:
+                # 新主题且信息不全：直接生成澄清回复
                 result = {"actions_taken": []}
                 response = await self._generate_clarification_response(content, understanding, context)
             else:
@@ -134,7 +268,7 @@ class AIEngine:
                 do_semantic = self._should_semantic_search(content)
                 if do_semantic:
                     understanding = await self._understand_message(content, user_id, context, trace_id=trace_id)
-            
+
                 # 由 LLM 产出工具计划
                 plan = await self._build_tool_plan(understanding, user_id, context=context)
                 steps = plan.get('steps') or []
@@ -235,10 +369,18 @@ class AIEngine:
             formatted_memories = []
             for memory in recent_memories:
                 if isinstance(memory, dict):
+                    aiu = memory.get('ai_understanding', {}) if isinstance(memory.get('ai_understanding'), dict) else {}
+                    # 时间优先 occurred_at，其次 ai_understanding.timestamp
+                    occurred_at = memory.get('occurred_at', '')
+                    ts_fallback = ''
+                    try:
+                        ts_fallback = aiu.get('timestamp', '') if isinstance(aiu, dict) else ''
+                    except Exception:
+                        ts_fallback = ''
                     formatted_memories.append({
                         'content': memory.get('content', ''),
-                        'ai_understanding': memory.get('ai_understanding', {}),
-                        'time': memory.get('occurred_at', '')
+                        'ai_understanding': aiu,
+                        'time': occurred_at or ts_fallback
                     })
             
             return formatted_memories
@@ -454,6 +596,161 @@ class AIEngine:
         
         return understanding
 
+    def _parse_iso_time(self, value: Optional[str]) -> Optional[datetime]:
+        if not value or not isinstance(value, str):
+            return None
+        try:
+            # Python 3.11+ 支持 fromisoformat 含偏移量
+            return datetime.fromisoformat(value)
+        except Exception:
+            try:
+                # 宽松解析（去掉Z）
+                if value.endswith('Z'):
+                    return datetime.fromisoformat(value[:-1])
+            except Exception:
+                return None
+        return None
+
+    async def _maybe_merge_followup(
+        self,
+        *,
+        understanding: Dict[str, Any],
+        content: str,
+        user_id: str,
+        context: Optional[Dict[str, Any]],
+        trace_id: str,
+    ) -> Tuple[Dict[str, Any], bool]:
+        """检测当前消息是否为对上次澄清的跟进，并进行槽位合并。
+        返回 (updated_understanding, was_followup)。"""
+        thread_id = (context or {}).get('thread_id') if context else None
+        channel = (context or {}).get('channel') if context else None
+        # 仅在有线程时考虑连续对话跟进
+        if not thread_id:
+            return understanding, False
+
+        # 拉取最近若干条 chat_turn
+        recent = await self._get_recent_memories(
+            user_id,
+            limit=6,
+            thread_id=thread_id,
+            shared_thread=False,
+            channel=channel,
+        )
+        if not recent:
+            return understanding, False
+
+        # 找到最近一条具有 need_clarification 的理解作为 pending 上下文
+        pending_ctx: Optional[Dict[str, Any]] = None
+        pending_time: Optional[datetime] = None
+        for item in reversed(recent):
+            aiu = item.get('ai_understanding') or {}
+            if isinstance(aiu, dict) and aiu.get('need_clarification') is True:
+                pending_ctx = aiu
+                pending_time = self._parse_iso_time(item.get('time'))
+                break
+
+        if pending_ctx is None:
+            return understanding, False
+
+        # 时间间隔判断：超阈值则视为新主题
+        now_dt = datetime.now()
+        if pending_time is not None:
+            gap = (now_dt - pending_time).total_seconds()
+            if gap > float(self._followup_max_gap_seconds):
+                return understanding, False
+
+        # 微分类器：判断是否跟进，以及补充了哪个槽位
+        cls = await self._classify_followup(
+            content=content,
+            pending=pending_ctx,
+            last_turns=recent[-4:],
+            trace_id=trace_id,
+        )
+        if not isinstance(cls, dict) or not cls.get('is_followup'):
+            return understanding, False
+
+        slot_name = cls.get('slot_name')
+        slot_value = cls.get('slot_value')
+        is_correction = bool(cls.get('is_correction'))
+
+        # 仅当 slot_name 存在时合并
+        if not slot_name:
+            return understanding, False
+
+        # 将补充槽位合并到当前 understanding.entities
+        entities = understanding.get('entities') or {}
+        if is_correction or slot_name not in entities or entities.get(slot_name) != slot_value:
+            entities[slot_name] = slot_value
+        understanding['entities'] = entities
+
+        # 继承意图（优先沿用 pending 的 intent）
+        if not understanding.get('intent') and isinstance(pending_ctx, dict):
+            understanding['intent'] = pending_ctx.get('intent')
+
+        # 更新 missing_fields：去掉已补充的字段
+        mf = understanding.get('missing_fields')
+        if not isinstance(mf, list) or not mf:
+            # 若轻理解未给出 missing_fields，则沿用 pending 的
+            mf = pending_ctx.get('missing_fields') if isinstance(pending_ctx, dict) else []
+            if not isinstance(mf, list):
+                mf = []
+        if slot_name in mf:
+            try:
+                mf = [m for m in mf if m != slot_name]
+            except Exception:
+                pass
+        understanding['missing_fields'] = mf
+
+        # 若都补齐，则转为可执行；否则保持澄清状态但只问一个剩余槽位
+        if not mf:
+            understanding['need_clarification'] = False
+            # 让后续路径可执行
+            understanding['need_action'] = True
+        else:
+            understanding['need_clarification'] = True
+            understanding['need_action'] = False
+
+        return understanding, True
+
+    async def _classify_followup(
+        self,
+        *,
+        content: str,
+        pending: Dict[str, Any],
+        last_turns: List[Dict[str, Any]],
+        trace_id: str,
+    ) -> Dict[str, Any]:
+        """轻量分类：判断是否跟进与槽位映射。"""
+        # 提取最近一条助手提问与待补充字段
+        last_assistant_prompt = ""
+        try:
+            for item in reversed(last_turns):
+                aiu = item.get('ai_understanding') or {}
+                if isinstance(aiu, dict) and aiu.get('role') == 'assistant':
+                    # 用助手最近的问题文本（若可用）；无则留空
+                    last_assistant_prompt = item.get('content', '')
+                    break
+        except Exception:
+            last_assistant_prompt = ""
+
+        payload = {
+            "current_message": content,
+            "pending_intent": (pending or {}).get('intent'),
+            "pending_entities": (pending or {}).get('entities', {}),
+            "pending_missing_fields": (pending or {}).get('missing_fields', []),
+            "assistant_last_question": last_assistant_prompt,
+        }
+        system, user = prompt_manager.get_followup_classifier_prompts(payload=payload)
+        try:
+            res = await self.llm.chat_json(system_prompt=system, user_prompt=user, temperature=0.1, max_tokens=200)
+            return res if isinstance(res, dict) else {}
+        except Exception:
+            try:
+                raw = await self.llm.chat_text(system_prompt=system, user_prompt=user, temperature=0.1, max_tokens=200)
+                return json.loads(raw)
+            except Exception:
+                return {}
+
     async def _build_context_via_batch_search(
         self,
         *,
@@ -481,14 +778,7 @@ class AIEngine:
         q_emb: Optional[List[float]] = None
         if include_semantic and query:
             try:
-                cache = self._emb_cache_by_trace.get(trace_id, {})
-                if query in cache:
-                    q_emb = cache[query]
-                else:
-                    embs = await self.llm.embed([query])
-                    q_emb = embs[0] if embs else None
-                    cache[query] = q_emb
-                    self._emb_cache_by_trace[trace_id] = cache
+                q_emb = await self._get_embedding_cached(query, trace_id)
             except Exception:
                 q_emb = None
             sem_filters: Dict[str, Any] = {"limit": 5}
@@ -670,7 +960,14 @@ class AIEngine:
             return result
 
         last_store_id: Optional[str] = None
-        allowed_tools = {"store", "search", "aggregate", "schedule_reminder", "get_pending_reminders", "mark_reminder_sent", "update_memory_fields", "render_chart", "batch_store", "batch_search"}
+        # 动态工具发现（与安全白名单交集）
+        dynamic_tools: List[str] = []
+        try:
+            dynamic_tools = await self._get_tool_names()
+        except Exception:
+            dynamic_tools = []
+        safe_whitelist = {"store", "search", "aggregate", "schedule_reminder", "get_pending_reminders", "mark_reminder_sent", "update_memory_fields", "render_chart", "batch_store", "batch_search", "soft_delete", "reembed_memories"}
+        allowed_tools = set([t for t in dynamic_tools if t in safe_whitelist]) or safe_whitelist
 
         for step in steps:
             if not isinstance(step, dict):
@@ -698,15 +995,7 @@ class AIEngine:
                 if tool == 'store':
                     text_for_embed = args.get('content') or understanding.get('original_content', '')
                     if text_for_embed and 'embedding' not in args:
-                        cache = self._emb_cache_by_trace.get(trace_id, {})
-                        if text_for_embed in cache:
-                            args['embedding'] = cache[text_for_embed]
-                        else:
-                            embs = await self.llm.embed([text_for_embed])
-                            # 确保为 Python float 列表，防止 JSON 序列化失败
-                            args['embedding'] = ([float(x) for x in embs[0]] if (embs and embs[0]) else None)
-                            cache[text_for_embed] = args['embedding']
-                            self._emb_cache_by_trace[trace_id] = cache
+                        args['embedding'] = await self._get_embedding_cached(text_for_embed, trace_id)
                     # 合并 ai_data
                     ai_data = args.get('ai_data') or {}
                     entities = understanding.get('entities', {})
@@ -722,14 +1011,7 @@ class AIEngine:
                 elif tool == 'search':
                     q = args.get('query')
                     if q and not args.get('query_embedding'):
-                        cache = self._emb_cache_by_trace.get(trace_id, {})
-                        if q in cache:
-                            args['query_embedding'] = cache[q]
-                        else:
-                            embs = await self.llm.embed([q])
-                            args['query_embedding'] = ([float(x) for x in embs[0]] if (embs and embs[0]) else None)
-                            cache[q] = args['query_embedding']
-                            self._emb_cache_by_trace[trace_id] = cache
+                        args['query_embedding'] = await self._get_embedding_cached(q, trace_id)
             except Exception:
                 pass
 
@@ -1125,45 +1407,56 @@ class AIEngine:
         # 如果有真实的MCP客户端
         if self.mcp_client:
             try:
-                # 使用httpx进行HTTP调用（复用客户端）
+                # 使用httpx进行HTTP调用（复用客户端），按工具时间预算设置超时
                 if self._http_client is None:
                     self._http_client = httpx.AsyncClient()
+                time_budget = await self._get_tool_time_budget(tool_name)
+                timeout = min(max(time_budget * 1.5, 1.0), 15.0)
                 response = await self._http_client.post(
-                        f"{self.mcp_url}/tool/{tool_name}",
-                        json=kwargs,
-                        timeout=10.0
-                    )
+                    f"{self.mcp_url}/tool/{tool_name}",
+                    json=kwargs,
+                    timeout=timeout,
+                )
                 http_status = response.status_code
                 response.raise_for_status() # 检查HTTP状态码
                 result_json = response.json()
             except httpx.RequestError as e:
                 logger.error(f"HTTP request to MCP tool failed: {e}")
-                # 回退到模拟模式
-        
-        # 模拟模式（用于开发和测试）或 HTTP 返回失败时的兜底
+                # 严格模式下不模拟
+            except httpx.HTTPStatusError as e:
+                logger.error(f"MCP tool HTTP error: {e}")
+
+        # 回退/严格模式处理
         if result_json is None:
-            if tool_name == 'store':
-                result_json = {"success": True, "id": f"mock-{datetime.now().timestamp()}"}
-            elif tool_name == 'search':
-                # 模拟一些搜索结果
-                if "本月" in str(kwargs.get('query', '')):
-                    result_json = [
-                        {"content": "买菜花了50元", "amount": 50, "occurred_at": datetime.now().isoformat()},
-                        {"content": "打车花了30元", "amount": 30, "occurred_at": datetime.now().isoformat()}
-                    ]
-                else:
+            if self._mcp_strict_mode:
+                # 返回显式错误对象，避免误判成功
+                if tool_name in {'search', 'batch_search'}:
                     result_json = []
-            elif tool_name == 'aggregate':
-                # 模拟聚合结果
-                if kwargs.get('operation') == 'sum':
-                    result_json = {"operation": "sum", "field": "amount", "result": 523.5}
+                elif tool_name == 'aggregate':
+                    result_json = {"error": "mcp_unavailable", "operation": kwargs.get('operation'), "field": kwargs.get('field')}
                 else:
-                    result_json = {"result": 0}
-            elif tool_name == 'get_pending_reminders':
-                # 模拟待发送提醒
-                result_json = []
+                    result_json = {"success": False, "error": "mcp_unavailable"}
             else:
-                result_json = {"success": True}
+                # 开发态模拟
+                if tool_name == 'store':
+                    result_json = {"success": True, "id": f"mock-{datetime.now().timestamp()}"}
+                elif tool_name == 'search':
+                    if "本月" in str(kwargs.get('query', '')):
+                        result_json = [
+                            {"content": "买菜花了50元", "amount": 50, "occurred_at": datetime.now().isoformat()},
+                            {"content": "打车花了30元", "amount": 30, "occurred_at": datetime.now().isoformat()}
+                        ]
+                    else:
+                        result_json = []
+                elif tool_name == 'aggregate':
+                    if kwargs.get('operation') == 'sum':
+                        result_json = {"operation": "sum", "field": "amount", "result": 523.5}
+                    else:
+                        result_json = {"result": 0}
+                elif tool_name == 'get_pending_reminders':
+                    result_json = []
+                else:
+                    result_json = {"success": True}
 
         # 结束日志与调用记录
         try:

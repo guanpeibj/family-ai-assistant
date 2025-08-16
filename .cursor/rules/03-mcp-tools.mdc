@@ -1,0 +1,30 @@
+---
+alwaysApply: true
+description: MCP 通用工具能力、参数规范与使用建议（无业务逻辑）
+---
+## 服务端
+- 文件：[mcp-server/generic_mcp_server.py](mdc:mcp-server/generic_mcp_server.py)
+- 作用：提供通用数据库与可视化能力（无业务逻辑）；AI 引擎通过 HTTP `/tools` 与 `/tool/{name}` 使用。
+- 启动时确保扩展与索引：`vector/pg_trgm/jsonb_path_ops` 及多种查询/表达式索引。
+
+## 工具清单（重点参数）
+- `store(content, ai_data, user_id, embedding?) -> {success,id}`
+  - 向量文本格式统一在引擎侧生成并传入；`ai_data` 建议包含 `occurred_at/thread_id/trace_id/external_id/source/version`。
+- `search(query, user_id, filters?, query_embedding?) -> list + _meta`
+  - 语义检索：传入 `query_embedding`；否则回退 `content % trigram` + 过滤。
+  - 常用过滤：`thread_id/type/channel/date_from/date_to/min_amount/max_amount/jsonb_equals/limit/shared_thread`
+- `batch_store([{content,ai_data,user_id,embedding?},...])`
+- `batch_search([{query,user_id,filters?,query_embedding?},...])`
+- `aggregate(user_id, operation, field?, filters?) -> {result|groups}`
+  - `operation: sum|count|avg|min|max`；分组：`filters.group_by=day|week|month`、`filters.group_by_ai_field=category/person/...`
+- `schedule_reminder(memory_id, remind_at)`、`get_pending_reminders(user_id)`、`mark_reminder_sent(reminder_id)`
+- `update_memory_fields(memory_id, fields)`：浅合并 `ai_understanding`，其余列定向更新。
+- `soft_delete(memory_id)`：设置 `ai_understanding.deleted=true`。
+- `reembed_memories(filters?)`：返回需重嵌条目 `{id,content}`。
+- `render_chart(type, title, x, series, style?) -> {success,path}`：保存至 `MEDIA_ROOT`，上层用签名链接对外。
+
+## 使用建议
+- 统一在引擎侧生成/缓存嵌入；MCP 仅存储向量文本表示。
+- 优先通过 `jsonb_equals` 做精确过滤；全文相似仅作回退或补充。
+- 幂等：使用 `ai_data.external_id` + `search` 检查，必要时 `update_memory_fields`。
+- 共享线程检索受限额保护（`limit` 封顶）；仅在确需跨用户线程回放时开启。

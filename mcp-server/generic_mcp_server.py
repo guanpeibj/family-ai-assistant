@@ -29,6 +29,14 @@ class GenericMCPServer:
     async def initialize(self):
         """初始化数据库连接池"""
         self.pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
+        # 确保必要扩展与索引存在（幂等）
+        try:
+            async with self.pool.acquire() as conn:
+                await self._ensure_db_extensions(conn)
+                await self._ensure_db_indexes(conn)
+        except Exception:
+            # 初始化阶段不因索引/扩展失败而阻塞服务启动（日志交由上层）
+            pass
     
     async def close(self):
         """关闭连接池"""
@@ -98,6 +106,8 @@ class GenericMCPServer:
                 await self._ensure_user(conn, uid)
                 # 共享线程模式：当指定 shared_thread=True 且提供 thread_id 时，放宽 user_id 约束，允许跨用户按线程聚合
                 shared_thread_mode = bool(filters and filters.get('shared_thread') and filters.get('thread_id'))
+                # 对共享线程施加更严格的 limit 上限，避免全表扫
+                shared_thread_limit_cap = 30
                 
                 # 如果提供查询向量，进行语义搜索
                 if query_embedding is not None:
@@ -147,16 +157,17 @@ class GenericMCPServer:
                         if 'max_amount' in filters:
                             sql += f" AND amount <= ${len(params) + 1}"
                             params.append(filters['max_amount'])
-                        # 通用 JSONB 等值过滤：filters.jsonb_equals = {key: value}
+                        # JSONB 包含过滤（充分利用 GIN jsonb_path_ops 索引）：filters.jsonb_equals = {...}
                         je = filters.get('jsonb_equals') if isinstance(filters.get('jsonb_equals'), dict) else None
                         if je:
-                            for k, v in je.items():
-                                sql += f" AND (ai_understanding->>'{k}') = ${len(params) + 1}"
-                                params.append(str(v))
+                            sql += f" AND ai_understanding @> ${len(params) + 1}::jsonb"
+                            params.append(json.dumps(je))
                     
                     limit_value = 20
                     if filters and isinstance(filters.get('limit'), int) and filters['limit'] > 0:
                         limit_value = min(filters['limit'], 100)
+                    if shared_thread_mode:
+                        limit_value = min(limit_value, shared_thread_limit_cap)
                     sql += " ORDER BY similarity DESC LIMIT $" + str(len(params) + 1)
                     params.append(limit_value)
                     
@@ -211,12 +222,11 @@ class GenericMCPServer:
                         if 'max_amount' in filters:
                             sql += f" AND amount <= ${len(params) + 1}"
                             params.append(filters['max_amount'])
-                        # 通用 JSONB 等值过滤
+                        # JSONB 包含过滤
                         je = filters.get('jsonb_equals') if isinstance(filters.get('jsonb_equals'), dict) else None
                         if je:
-                            for k, v in je.items():
-                                sql += f" AND (ai_understanding->>'{k}') = ${len(params) + 1}"
-                                params.append(str(v))
+                            sql += f" AND ai_understanding @> ${len(params) + 1}::jsonb"
+                            params.append(json.dumps(je))
                         if 'limit' in filters and isinstance(filters['limit'], int):
                             limit_value = min(max(filters['limit'], 1), 200)
                         else:
@@ -224,6 +234,8 @@ class GenericMCPServer:
                     else:
                         limit_value = 20
 
+                    if shared_thread_mode:
+                        limit_value = min(limit_value, shared_thread_limit_cap)
                     if trigram_param_idx is not None:
                         sql += f" ORDER BY similarity(content, ${trigram_param_idx}) DESC NULLS LAST, occurred_at DESC NULLS LAST, created_at DESC LIMIT {limit_value}"
                     else:
@@ -267,6 +279,44 @@ class GenericMCPServer:
             return [{
                 "error": str(e)
             }]
+
+    async def _ensure_db_extensions(self, conn) -> None:
+        """确保所需扩展存在。"""
+        try:
+            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        except Exception:
+            pass
+        try:
+            await conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        except Exception:
+            pass
+
+    async def _ensure_db_indexes(self, conn) -> None:
+        """确保关键索引存在（幂等）。"""
+        stmts = [
+            # 向量检索索引（ivfflat，cosine）
+            "CREATE INDEX IF NOT EXISTS idx_memories_embedding_ivfflat ON memories USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)",
+            # trigram 文本相似索引
+            "CREATE INDEX IF NOT EXISTS idx_memories_content_trgm ON memories USING gin (content gin_trgm_ops)",
+            # JSONB 包含查询优化（path ops）
+            "CREATE INDEX IF NOT EXISTS idx_memories_ai_understanding_path ON memories USING gin (ai_understanding jsonb_path_ops)",
+            # 表达式索引：thread_id/type/channel
+            "CREATE INDEX IF NOT EXISTS idx_memories_aiu_thread_id ON memories ((ai_understanding->>'thread_id'))",
+            "CREATE INDEX IF NOT EXISTS idx_memories_aiu_type ON memories ((ai_understanding->>'type'))",
+            "CREATE INDEX IF NOT EXISTS idx_memories_aiu_channel ON memories ((ai_understanding->>'channel'))",
+            # 组合索引：thread + time，加速共享线程回放
+            "CREATE INDEX IF NOT EXISTS idx_memories_thread_time ON memories ((ai_understanding->>'thread_id'), occurred_at DESC)",
+            # 组合索引：用户 + 时间
+            "CREATE INDEX IF NOT EXISTS idx_memories_user_occ ON memories (user_id, occurred_at DESC)",
+            # 软去重：存在 external_id 时的唯一约束
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_user_external_id ON memories (user_id, (ai_understanding->>'external_id')) WHERE ai_understanding ? 'external_id'"
+        ]
+        for s in stmts:
+            try:
+                await conn.execute(s)
+            except Exception:
+                # 单条失败不影响整体
+                pass
     
     async def _aggregate(self, user_id: str, operation: str, field: Optional[str], filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """对数据进行聚合统计"""

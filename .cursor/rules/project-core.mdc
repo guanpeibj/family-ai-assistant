@@ -8,14 +8,16 @@ FAA 是一个家庭 AI 助手，专为解决家庭日常需求而设计：
 - 智能记录和管理家庭财务、健康信息、日常杂事
 - 通过 Threema、邮件等多渠道与用户交互
 - AI 驱动、极简设计、实用至上
-- 即使工程代码保持不变，系统的智能和能力也应该随着 AI 模型的进步和数据的积累而自动提升
+- 即使工程代码保持不变，系统的智能和能力也应该随着 AI 模型的进步、数据的积累和prompts的优化而自动提升
 
 ## 核心架构原则
 
 ### 1. 极简三层架构
 ```
+                            Prompt manager
+                                    ↓
 用户 → Threema/邮件 → FastAPI → AI Engine → MCP Tools → PostgreSQL
-                                      ↓
+                                    ↓
                           OpenAI API / Other AI
 ```
 
@@ -32,8 +34,14 @@ FAA 是一个家庭 AI 助手，专为解决家庭日常需求而设计：
 
 ### 4. MCP 工具设计
 - 工具完全泛化，不包含业务逻辑
-- 只提供基础能力：store, search, aggregate, schedule_reminder等等
-- 业务逻辑完全由 AI 在运行时决定
+- 提供操作数据库的完整能力，包括store, search, aggregate, schedule_reminder等等
+- 工具的编排使用，完全由 AI 在运行时决定
+
+### 5. ai engine和promts完美配合
+- 充分利用prompts，最大化激发llm智能，以让ai驱动主要流程
+- 轻量多步，小context多次调用，减少幻觉、提高决策准确性，降低成本
+- 专题化提示，每步用更聚焦的 prompt，模型更易命中要点
+
 
 ## 开发原则
 1. **简单直接**：代码清晰易懂，避免过度设计

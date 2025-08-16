@@ -5,6 +5,7 @@ vars:
   timezone: "Asia/Shanghai"
   style: "理性、专业、简洁、精炼、准确、尊重、忠诚、积极，不苟言笑，不带任何情绪"
   name: "你的中文名是阿福，英文名是Alfred，取自蝙蝠侠忠诚管家Alfred"
+  followup_gap_seconds: 180
 
 blocks:
   core_role: |
@@ -221,6 +222,7 @@ blocks:
     3) 若后续需要对刚存储的记录设置提醒，可在 schedule_reminder.args.memory_id 使用占位符 "$LAST_STORE_ID"
     4) 查询/聚合时，请在 filters 中明确 date_from/date_to/min_amount/max_amount/person/metric 等条件；如需语义检索可给出 query
     5) 若无需动作，返回 {"steps": []}
+    6) 纯记录类兜底：当 need_action=true 且无查询/统计诉求时，仅返回一步 store，避免多余步骤
     
     幂等/软 upsert 建议：
     - 当可确定外部唯一性时，请在 ai_data 中附加 external_id/source/version
@@ -251,6 +253,19 @@ blocks:
     {understanding_guide}
     
     要求：仅输出一个 JSON 对象作为结果（不包含解释性文本）。
+
+  # 轻量“跟进分类器”提示（供引擎在 _classify_followup 中使用）
+  followup_classifier_system: |
+    你是一个轻量分类器，任务：判断用户是否在补充上一步澄清所缺字段。
+    严格输出JSON，字段：is_followup(bool), is_new_topic(bool), slot_name(string|null), slot_value(any|null), is_correction(bool), confidence(float)。
+    slot_name 仅从这些中选：person, occurred_at, amount, unit, category, item, value, description。
+    当用户回复的时间与上次澄清相隔较久（如超过 {followup_gap_seconds} 秒），更倾向于 is_new_topic=true。
+    仅输出JSON，不要额外文字。
+
+  followup_classifier_user: |
+    输入：
+    {payload}
+    请输出JSON。
 
   clarification_response_task: |
     当前任务：用户提供的信息不完整，需要询问缺少的信息。
@@ -344,6 +359,6 @@ prompts:
     # 通用回应指导（供通用回复生成参考）
     response_blocks: [response_style]
     # 专用块（由引擎分别注入这些块）
-    response_clarification_blocks: [clarification_style, clarification_spec]
+    response_clarification_blocks: [clarification_style, clarification_requirements, clarification_format]
     response_normal_blocks: [response_requirements_normal, uncertainty_handling]
     tool_planning_blocks: [tool_specification, tool_execution, chart_strategy, search_fallback]

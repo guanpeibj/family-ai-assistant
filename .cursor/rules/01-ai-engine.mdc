@@ -1,0 +1,29 @@
+---
+globs: src/ai_engine.py
+description: AI 引擎（消息理解→计划→工具执行→回复→存储）的行为准则与扩展点
+---
+## 流程总览
+1) 轻理解 `_light_understand_message`：低成本判定意图/缺失信息，尽早澄清。
+2) 跟进合并 `_maybe_merge_followup`：基于最近 `chat_turn` 与分类器合并槽位（person/occurred_at/amount/...）。
+3) 条件重理解 `_understand_message`：当需要语义检索/统计/复杂理解时，批量 `batch_search` 组装上下文（最近对话、语义相关、线程摘要）。
+4) 计划 `_build_tool_plan`：基于 Prompt(含动态工具规格) 仅输出 `{steps:[{tool,args}]}`。
+5) 执行 `_execute_tool_steps`：动态工具白名单、自动注入 `user_id/thread_id/trace_id`、为 `store/search` 自动生成/复用向量，支持 `$LAST_STORE_ID`。
+6) 回复：简单操作走 `_build_simple_ack_response`；否则 `_generate_clarification_response` / `_generate_normal_response`（可选 `render_chart` + 签名链接）。
+7) 持久化：`_store_chat_turns`（批量存 user/assistant 回合）、`_persist_interaction`（全链路回溯）。
+
+## 重要约束
+- 不在引擎中硬编码业务逻辑；一切依赖 Prompt 与 MCP 工具。
+- 工具时间预算来自 MCP `/tools` 的 `x_time_budget`，未命中用内置默认。
+- 严格模式(`MCP_STRICT_MODE=true`)下 MCP 不可用时不做模拟；理解/计划照常进行但工具结果为空或 error 对象。
+- 嵌入缓存：trace 级与全局 LRU，优先复用以降成本；所有向量生成集中在引擎侧。
+- 共享线程：当 `context.shared_thread=true` 或 `conversation_scope=shared` 时，允许跨用户按 `thread_id` 聚合检索（MCP 内部有上限保护）。
+
+## 扩展建议
+- 新工具接入：先在 MCP 暴露，再在 Prompt `tool_specification` 描述并加入引擎白名单；避免在引擎写死参数。
+- 新回复风格：通过 YAML `response_*` 块扩展；引擎仅拼装 system/user 提示。
+- 统计/图表：用 `aggregate` + `render_chart`，分组字段走 `filters.group_by/group_by_ai_field`。
+
+## 易错点
+- `store` 时合并 `entities`→`ai_data` 并尽量补全 `occurred_at/thread_id/trace_id/attachments`。
+- 工具返回列表末尾可能有 `_meta`，展示时需过滤。
+- Threema 渠道长度控制：过长自动截断至 <500 字。

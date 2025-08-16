@@ -1,0 +1,23 @@
+---
+globs: src/api/*.py
+description: API 入口、Webhooks、后台任务与渠道策略（Threema）
+---
+## FastAPI 应用
+- 入口：[src/api/main.py](mdc:src/api/main.py)
+  - 生命周期：初始化数据库、AI 引擎（连接 MCP）、启动提醒后台任务，关闭时清理资源。
+  - 端点：`/health`、`/message`、根路径 `/`、签名媒体回退 `/media/get`。
+  - `/message`：直接将请求转交给 AI 引擎 `process_message`，channel 固定为 `api`。
+
+## Threema Webhook
+- 路由与逻辑：[src/api/threema_webhook.py](mdc:src/api/threema_webhook.py)
+  - 验证 MAC、端到端解密（见 [src/services/threema_service.py](mdc:src/services/threema_service.py)）。
+  - 附件保存至 `MEDIA_ROOT` 的年月目录；后台派生转写/OCR/视觉摘要并存储“附件衍生结果”记忆。
+  - 用户识别/创建：表 `users` 与 `user_channels`；以发送者 ID 作为稳定 `thread_id`。
+  - 调用 AI 引擎并将回复回发 Threema；失败亦返回 200 以避免重试。
+
+## 渠道策略
+- Threema 长度约束：<500 字，必要时引擎侧自动截断。
+- 媒体外发：优先对象存储签名 URL；回退端点为 `/media/get`（需 `p/exp/sig`）。
+
+## 后台任务
+- 定时提醒：`main.py` 中 `reminder_task` 每分钟调用 `ai_engine.check_and_send_reminders(send_to_threema_user)`；工具链：`get_pending_reminders`→发送→`mark_reminder_sent`。

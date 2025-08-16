@@ -1,0 +1,17 @@
+---
+alwaysApply: true
+description: 配置与日志（pydantic-settings + structlog），影响运行期行为与可观测性
+---
+## 配置：[src/core/config.py](mdc:src/core/config.py)
+- 通过环境变量控制：
+  - 应用：`APP_ENV, DEBUG`
+  - 数据库：`DATABASE_URL`
+  - LLM：`AI_PROVIDER, OPENAI_API_KEY, OPENAI_MODEL, OPENAI_BASE_URL, OPENAI_EMBEDDING_MODEL, EMBED_PROVIDER, FASTEMBED_MODEL, ANTHROPIC_*`
+  - 多模态：`MEDIA_ROOT, MEDIA_PUBLIC_BASE_URL, SIGNING_SECRET, ENABLE_STT, ENABLE_OCR, ENABLE_VISION, OPENAI_STT_MODEL, OPENAI_VISION_MODEL`
+  - 安全：`SECRET_KEY, ALLOWED_USERS`
+- `settings.parse_allowed_users()` 可将逗号字符串转列表。
+
+## 日志：[src/core/logging.py](mdc:src/core/logging.py)
+- 使用 structlog 输出结构化日志；`DEBUG=true` 时用彩色控制台渲染，否则 JSON。
+- 自动注入调用位置信息、时间戳、异常堆栈；推荐使用 `get_logger(__name__)` 获取实例。
+- 引擎、API、MCP 调用均带有 trace_id/工具调用结果计数等上下文，便于排障。

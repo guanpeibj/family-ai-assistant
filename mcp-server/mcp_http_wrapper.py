@@ -82,7 +82,12 @@ async def call_tool(tool_name: str, request: Dict[str, Any]):
 @app.get("/tools")
 async def list_tools():
     """列出可用的工具"""
+    from datetime import datetime
+    version = os.getenv("MCP_TOOLS_VERSION", "v1.1")
+    generated_at = datetime.utcnow().isoformat() + "Z"
     return {
+        "version": version,
+        "generated_at": generated_at,
         "tools": [
             {
                 "name": "store",
@@ -119,6 +124,9 @@ async def list_tools():
                     }
                 },
                 "x_capabilities": {"uses_vector": True, "idempotent": False, "batch_supported": True},
+                "x_latency_hint": "low",
+                "x_time_budget": 2.0,
+                "x_common_failures": ["db_unavailable", "invalid_embedding_format"],
                 "x_limits": {"notes": "embedding维度需与数据库向量维度一致"},
                 "x_examples": {"request": {"content": "今天买菜花了50元", "ai_data": {"intent": "record_expense", "amount": 50}, "user_id": "userA"}}
             },
@@ -142,7 +150,18 @@ async def list_tools():
                     "properties": {
                         "query": {"type": "string"},
                         "user_id": {"type": "string"},
-                        "filters": {"type": "object"},
+                        "filters": {"type": "object", "properties": {
+                            "date_from": {"type": "string"},
+                            "date_to": {"type": "string"},
+                            "min_amount": {"type": "number"},
+                            "max_amount": {"type": "number"},
+                            "thread_id": {"type": "string"},
+                            "type": {"type": "string"},
+                            "channel": {"type": "string"},
+                            "limit": {"type": "integer"},
+                            "jsonb_equals": {"type": "object"},
+                            "shared_thread": {"type": "boolean"}
+                        }},
                         "query_embedding": {"oneOf": [{"type": "array", "items": {"type": "number"}}, {"type": "string"}]}
                     },
                     "required": ["user_id"]
@@ -151,8 +170,11 @@ async def list_tools():
                     "type": "array",
                     "items": {"type": "object"}
                 },
-                "x_notes": "返回数组最后包含 _meta 对象，含 used_vector/used_trigram/limit/applied_filters/shared_thread_mode/returned",
+                "x_notes": "返回数组最后包含 _meta 对象，含 used_vector/used_trigram/limit/applied_filters/shared_thread_mode/returned。shared_thread 模式必须提供 thread_id，且 limit 会被强制上限（30）。jsonb_equals 走 JSONB 包含 @> 查询。",
                 "x_capabilities": {"uses_vector": True, "supports_trigram": True, "supports_filters": True, "batch_supported": True},
+                "x_latency_hint": "medium",
+                "x_time_budget": 3.0,
+                "x_common_failures": ["invalid_filter", "db_unavailable", "timeout"],
                 "x_limits": {"limit_max": 200},
                 "x_error_codes": ["invalid_filter", "db_unavailable"],
                 "x_examples": {"request": {"query": "餐饮 本月", "user_id": "userA", "filters": {"date_from": "2025-01-01T00:00:00", "date_to": "2025-01-31T23:59:59"}}}
@@ -183,22 +205,34 @@ async def list_tools():
                     }
                 },
                 "x_capabilities": {"supports_group_by": True},
+                "x_latency_hint": "medium",
+                "x_time_budget": 3.0,
+                "x_common_failures": ["invalid_filter", "field_missing", "db_unavailable", "timeout"],
                 "x_examples": {"request": {"user_id": "userA", "operation": "sum", "field": "amount", "filters": {"group_by": "month"}}}
             },
             {
                 "name": "schedule_reminder",
                 "description": "为某个记忆设置提醒",
-                "parameters": ["memory_id", "remind_at"]
+                "parameters": ["memory_id", "remind_at"],
+                "x_latency_hint": "low",
+                "x_time_budget": 2.0,
+                "x_common_failures": ["invalid_memory_id", "time_format_error", "db_unavailable"]
             },
             {
                 "name": "get_pending_reminders",
                 "description": "获取待发送的提醒",
-                "parameters": ["user_id"]
+                "parameters": ["user_id"],
+                "x_latency_hint": "low",
+                "x_time_budget": 3.0,
+                "x_common_failures": ["db_unavailable"]
             },
             {
                 "name": "mark_reminder_sent",
                 "description": "标记提醒为已发送",
-                "parameters": ["reminder_id"]
+                "parameters": ["reminder_id"],
+                "x_latency_hint": "low",
+                "x_time_budget": 2.0,
+                "x_common_failures": ["invalid_reminder_id", "db_unavailable"]
             },
             {
                 "name": "render_chart",
@@ -216,7 +250,10 @@ async def list_tools():
                     {"name": "x", "type": "array", "required": True},
                     {"name": "series", "type": "array", "required": True},
                     {"name": "style", "type": "object", "required": False}
-                ]
+                ],
+                "x_latency_hint": "high",
+                "x_time_budget": 6.0,
+                "x_common_failures": ["matplotlib_error", "fs_unwritable"]
             },
             {
                 "name": "batch_store",
@@ -225,7 +262,10 @@ async def list_tools():
                 "x_parameters_detail": [
                     {"name": "memories", "type": "array", "required": True, "description": "数组元素为 store 的输入对象"}
                 ],
-                "x_capabilities": {"batch_supported": True, "uses_vector": True}
+                "x_capabilities": {"batch_supported": True, "uses_vector": True},
+                "x_latency_hint": "medium",
+                "x_time_budget": 5.0,
+                "x_common_failures": ["db_unavailable", "invalid_embedding_format"]
             },
             {
                 "name": "batch_search",
@@ -234,7 +274,10 @@ async def list_tools():
                 "x_parameters_detail": [
                     {"name": "queries", "type": "array", "required": True, "description": "数组元素为 search 的输入对象"}
                 ],
-                "x_capabilities": {"batch_supported": True}
+                "x_capabilities": {"batch_supported": True},
+                "x_latency_hint": "medium",
+                "x_time_budget": 5.0,
+                "x_common_failures": ["invalid_filter", "db_unavailable", "timeout"]
             },
             {
                 "name": "update_memory_fields",
@@ -243,7 +286,10 @@ async def list_tools():
                 "x_parameters_detail": [
                     {"name": "memory_id", "type": "string", "required": True},
                     {"name": "fields", "type": "object", "required": True}
-                ]
+                ],
+                "x_latency_hint": "low",
+                "x_time_budget": 2.0,
+                "x_common_failures": ["invalid_memory_id", "invalid_field", "db_unavailable"]
             },
             {
                 "name": "soft_delete",
@@ -251,7 +297,10 @@ async def list_tools():
                 "parameters": ["memory_id"],
                 "x_parameters_detail": [
                     {"name": "memory_id", "type": "string", "required": True}
-                ]
+                ],
+                "x_latency_hint": "low",
+                "x_time_budget": 2.0,
+                "x_common_failures": ["invalid_memory_id", "db_unavailable"]
             },
             {
                 "name": "reembed_memories",
@@ -260,7 +309,10 @@ async def list_tools():
                 "x_parameters_detail": [
                     {"name": "filters", "type": "object", "required": False, "description": "embedding_missing/date_from/date_to/jsonb_equals/limit"}
                 ],
-                "x_capabilities": {"uses_vector": False, "batch_supported": False}
+                "x_capabilities": {"uses_vector": False, "batch_supported": False},
+                "x_latency_hint": "low",
+                "x_time_budget": 5.0,
+                "x_common_failures": ["db_unavailable"]
             }
         ]
     }

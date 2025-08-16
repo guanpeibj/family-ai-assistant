@@ -1,0 +1,29 @@
+---
+globs: prompts/*.yaml
+description: Prompt 版本管理、块化装配与动态工具注入（无需改代码即可演进行为）
+---
+## 文件与管理器
+- Prompt 文件：[prompts/family_assistant_prompts.yaml](mdc:prompts/family_assistant_prompts.yaml)
+- 管理器：[src/core/prompt_manager.py](mdc:src/core/prompt_manager.py)
+- 当前版本由 YAML `current` 字段切换（当前为 `v3`）。
+
+## 结构要点
+- `vars`：模板变量（如 `timezone/style/name`）。
+- `blocks`：复用片段（system/understanding/response/tool 等规范与策略）。
+- `prompts`：多版本装配，支持 `inherits` 与 `*_blocks`。
+- 动态占位：
+  - `{{DYNAMIC_TOOLS}}`：系统提示中注入 MCP 工具列表（名称/参数/预算/幂等等）。
+  - `{{DYNAMIC_TOOL_SPECS}}`：工具编排提示注入详细规格与常见失败说明。
+
+## 与引擎的耦合点（勿改函数名）
+- 理解提示：`get_message_understanding_prompt`
+- 跟进分类器：`get_followup_classifier_prompts`
+- 澄清任务/用户提示：`get_clarification_task_prompt` / `get_clarification_user_prompt`
+- 正常任务/用户提示：`get_normal_task_prompt` / `get_normal_user_prompt`
+- 工具计划提示：`get_tool_planning_prompt_with_tools`
+- 系统提示（含工具）：`get_system_prompt_with_tools`
+
+## 修改建议
+- 新能力优先以“增加/调整 blocks”与“更新 current 版本”实现；避免在代码层硬编码。
+- 新增工具：更新 MCP → 在 `tool_specification` 块补充说明 → 在引擎白名单加入工具名。
+- 频道策略：使用 `length_constraints` 等块控制不同渠道的长度/格式与风格。
