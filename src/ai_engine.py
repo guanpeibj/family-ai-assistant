@@ -2,7 +2,7 @@
 AI驱动的核心引擎 - 让AI决定一切
 """
 import json
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Union
 from datetime import datetime, timedelta
 import uuid
 import time
@@ -247,42 +247,149 @@ class AIEngine:
                 content = (content or '').strip()
                 extra = "\n\n[来自附件的文本]\n" + "\n".join(derived_texts)
                 content = (content + extra) if content else "\n".join(derived_texts)
-            # 新流程：先做轻理解以便早停
+            # 新流程：先做轻理解，以便必要时早停
             understanding = await self._light_understand_message(content, user_id, context, trace_id=trace_id)
 
-            # 轻量“跟进”识别与槽位合并（利用最近 2-4 条 chat_turn）
-            understanding, was_followup = await self._maybe_merge_followup(
-                understanding=understanding,
-                content=content,
-                user_id=user_id,
-                context=context,
-                trace_id=trace_id,
-            )
-
-            if understanding.get('need_clarification') and not was_followup:
-                # 新主题且信息不全：直接生成澄清回复
+            # 轻理解阶段不早停；统一由线程状态归纳与后续 gating 决定是否澄清
+            if understanding.get('need_clarification'):
                 result = {"actions_taken": []}
                 response = await self._generate_clarification_response(content, understanding, context)
+                try:
+                    await self._store_chat_turns(
+                        user_id=user_id,
+                        thread_id=thread_id,
+                        trace_id=trace_id,
+                        user_message=content,
+                        assistant_message=response,
+                        understanding=understanding,
+                        context=context,
+                    )
+                except Exception as e:
+                    logger.error("store.chat_turns.failed", trace_id=trace_id, error=str(e))
+                try:
+                    tool_calls = self._tool_calls_by_trace.get(trace_id, [])
+                    await self._persist_interaction(
+                        trace_id=trace_id,
+                        user_id=user_id,
+                        thread_id=thread_id,
+                        channel=channel,
+                        message_id=(context or {}).get('message_id') if context else None,
+                        input_text=content,
+                        understanding=understanding,
+                        actions=result,
+                        response_text=response,
+                        tool_calls=tool_calls,
+                    )
+                except Exception as e:
+                    logger.error("interaction.persist.failed", trace_id=trace_id, error=str(e))
+                return response
+
+            # Step 2. 可选重理解（查询/统计/复杂文本）
+            do_semantic = self._should_semantic_search(content)
+            if do_semantic:
+                understanding = await self._understand_message(content, user_id, context, trace_id=trace_id)
+
+            # Step 3. 线程状态：动态低预算（含冷却窗口）跳过归纳，直接复用理解；正常模式执行归纳
+            low_budget = bool(getattr(settings, 'LOW_LLM_BUDGET', False))
+            try:
+                from .core.llm_client import LLMClient as _LLMClient
+                if hasattr(_LLMClient, 'in_cooldown') and callable(getattr(_LLMClient, 'in_cooldown')) and _LLMClient.in_cooldown():
+                    low_budget = True
+            except Exception:
+                pass
+            if low_budget:
+                thread_state = {**(understanding or {})}
+                thread_state.setdefault('type', 'thread_state')
+                thread_state.setdefault('thread_id', thread_id)
+                thread_state.setdefault('channel', channel)
+                try:
+                    await self._persist_thread_state(user_id=user_id, context=context, state=thread_state, trace_id=trace_id)
+                except Exception as e:
+                    logger.warning("thread_state.persist.skip", trace_id=trace_id, error=str(e))
             else:
-                # 对于查询/分析类，升级为重理解（带批量上下文）
-                do_semantic = self._should_semantic_search(content)
-                if do_semantic:
-                    understanding = await self._understand_message(content, user_id, context, trace_id=trace_id)
+                thread_state = await self._reduce_thread_state(
+                    current_understanding=understanding,
+                    user_id=user_id,
+                    context=context,
+                    trace_id=trace_id,
+                )
+                # 持久化线程状态（外部幂等：external_id = thread_state:<thread_id>）
+                try:
+                    await self._persist_thread_state(user_id=user_id, context=context, state=thread_state, trace_id=trace_id)
+                except Exception as e:
+                    logger.warning("thread_state.persist.skip", trace_id=trace_id, error=str(e))
 
-                # 由 LLM 产出工具计划
-                plan = await self._build_tool_plan(understanding, user_id, context=context)
-                steps = plan.get('steps') or []
+            # 若状态仍需澄清：先回复澄清，再记录并返回（保证状态已持久化，支持下一轮合并）
+            if thread_state.get('need_clarification'):
+                result = {"actions_taken": []}
+                response = await self._generate_clarification_response(content, thread_state, context)
+                try:
+                    await self._store_chat_turns(
+                        user_id=user_id,
+                        thread_id=thread_id,
+                        trace_id=trace_id,
+                        user_message=content,
+                        assistant_message=response,
+                        understanding=thread_state,
+                        context=context,
+                    )
+                except Exception as e:
+                    logger.error("store.chat_turns.failed", trace_id=trace_id, error=str(e))
+                try:
+                    tool_calls = self._tool_calls_by_trace.get(trace_id, [])
+                    await self._persist_interaction(
+                        trace_id=trace_id,
+                        user_id=user_id,
+                        thread_id=thread_id,
+                        channel=channel,
+                        message_id=(context or {}).get('message_id') if context else None,
+                        input_text=content,
+                        understanding=thread_state,
+                        actions=result,
+                        response_text=response,
+                        tool_calls=tool_calls,
+                    )
+                except Exception as e:
+                    logger.error("interaction.persist.failed", trace_id=trace_id, error=str(e))
+                return response
 
-                # 如果未做重理解，但计划中存在 search/aggregate，则补做一次重理解以提升回答质量
-                if (not do_semantic) and any(((s or {}).get('tool') in {'search','aggregate'}) for s in steps):
-                    understanding = await self._understand_message(content, user_id, context, trace_id=trace_id)
-                # 执行工具
-                result = await self._execute_tool_steps(steps, understanding, user_id, context=context, trace_id=trace_id)
-                # 回复：简单操作走快速确认，否则走正常生成
-                if self._is_simple_actions_only(steps):
-                    response = self._build_simple_ack_response(understanding, result, context)
+            # 由 LLM 产出工具计划（以线程状态为输入，避免依赖工程分支）
+            plan = await self._build_tool_plan(thread_state, user_id, context=context)
+            steps = plan.get('steps') or []
+
+            # 如计划包含 search/aggregate 而尚未做重理解，可再补做一次重理解提升质量
+            if (not do_semantic) and any(((s or {}).get('tool') in {'search','aggregate'}) for s in steps):
+                understanding = await self._understand_message(content, user_id, context, trace_id=trace_id)
+                # 与前述保持一致的低预算策略
+                if low_budget:
+                    thread_state = {**(understanding or {})}
+                    thread_state.setdefault('type', 'thread_state')
+                    thread_state.setdefault('thread_id', thread_id)
+                    thread_state.setdefault('channel', channel)
+                    try:
+                        await self._persist_thread_state(user_id=user_id, context=context, state=thread_state, trace_id=trace_id)
+                    except Exception as e:
+                        logger.warning("thread_state.persist.skip", trace_id=trace_id, error=str(e))
                 else:
-                    response = await self._generate_normal_response(content, understanding, result, context)
+                    thread_state = await self._reduce_thread_state(
+                        current_understanding=understanding,
+                        user_id=user_id,
+                        context=context,
+                        trace_id=trace_id,
+                    )
+                    try:
+                        await self._persist_thread_state(user_id=user_id, context=context, state=thread_state, trace_id=trace_id)
+                    except Exception as e:
+                        logger.warning("thread_state.persist.skip", trace_id=trace_id, error=str(e))
+
+            # 执行工具（以 thread_state 作为理解源）
+            result = await self._execute_tool_steps(steps, thread_state, user_id, context=context, trace_id=trace_id)
+
+            # 回复：简单操作走快速确认，否则走正常生成
+            if self._is_simple_actions_only(steps):
+                response = self._build_simple_ack_response(thread_state, result, context)
+            else:
+                response = await self._generate_normal_response(content, thread_state, result, context)
 
             # 存储对话回合（用户与助手各一条），用于连续对话与后续检索
             try:
@@ -292,18 +399,19 @@ class AIEngine:
                     trace_id=trace_id,
                     user_message=content,
                     assistant_message=response,
-                    understanding=understanding,
+                    understanding=thread_state,
                     context=context,
                 )
             except Exception as e:
                 logger.error("store.chat_turns.failed", trace_id=trace_id, error=str(e))
 
-            # 触发会话摘要（后台任务）
-            try:
-                import asyncio as _asyncio
-                _asyncio.create_task(self._maybe_summarize_thread(user_id=user_id, thread_id=thread_id, trace_id=trace_id))
-            except Exception as e:
-                logger.warning("thread.summarize.skip", trace_id=trace_id, error=str(e))
+            # 触发会话摘要（后台任务）：在低预算/冷却模式下跳过
+            if not low_budget:
+                try:
+                    import asyncio as _asyncio
+                    _asyncio.create_task(self._maybe_summarize_thread(user_id=user_id, thread_id=thread_id, trace_id=trace_id))
+                except Exception as e:
+                    logger.warning("thread.summarize.skip", trace_id=trace_id, error=str(e))
 
             # 落盘交互轨迹，便于排障
             try:
@@ -315,14 +423,14 @@ class AIEngine:
                     channel=channel,
                     message_id=(context or {}).get('message_id') if context else None,
                     input_text=content,
-                    understanding=understanding,
+                    understanding=thread_state,
                     actions=result,
                     response_text=response,
                     tool_calls=tool_calls,
                 )
             except Exception as e:
                 logger.error("interaction.persist.failed", trace_id=trace_id, error=str(e))
-            
+
             return response
             
         except Exception as e:
@@ -368,7 +476,7 @@ class AIEngine:
             # 格式化记忆，提取关键信息
             formatted_memories = []
             for memory in recent_memories:
-                if isinstance(memory, dict):
+                if isinstance(memory, dict) and not memory.get('_meta'):
                     aiu = memory.get('ai_understanding', {}) if isinstance(memory.get('ai_understanding'), dict) else {}
                     # 时间优先 occurred_at，其次 ai_understanding.timestamp
                     occurred_at = memory.get('occurred_at', '')
@@ -566,13 +674,14 @@ class AIEngine:
             need_clarification: bool = False
             missing_fields: List[str] = Field(default_factory=list)
             clarification_questions: List[str] = Field(default_factory=list)
-            suggested_actions: List[Dict[str, Any]] = Field(default_factory=list)
+            suggested_actions: List[Union[Dict[str, Any], str]] = Field(default_factory=list)
             original_content: str = content
             context_related: Optional[bool] = None
 
         try:
             parsed = UnderstandingModel(**understanding)
-            understanding = parsed.model_dump()
+            # 合并保留 LLM 可能输出的额外字段（如 conversation_act/update_existing/occurred_at 等）
+            understanding = {**understanding, **parsed.model_dump()}
         except ValidationError as ve:
             logger.warning("llm.parse.validation_error", trace_id=trace_id, error=str(ve), raw=understanding)
             # 容错：最少保证必须字段存在
@@ -582,6 +691,20 @@ class AIEngine:
             understanding.setdefault('missing_fields', [])
             understanding.setdefault('clarification_questions', [])
             understanding.setdefault('suggested_actions', [])
+
+        # 归一化：将 suggested_actions 中的字符串项转换为对象 {"text": "..."}
+        try:
+            _sa = understanding.get('suggested_actions')
+            if isinstance(_sa, list):
+                _norm: List[Dict[str, Any]] = []
+                for _item in _sa:
+                    if isinstance(_item, str):
+                        _norm.append({'text': _item})
+                    elif isinstance(_item, dict):
+                        _norm.append(_item)
+                understanding['suggested_actions'] = _norm
+        except Exception:
+            pass
 
         understanding['original_content'] = content
 
@@ -883,13 +1006,14 @@ class AIEngine:
             need_clarification: bool = False
             missing_fields: List[str] = Field(default_factory=list)
             clarification_questions: List[str] = Field(default_factory=list)
-            suggested_actions: List[Dict[str, Any]] = Field(default_factory=list)
+            suggested_actions: List[Union[Dict[str, Any], str]] = Field(default_factory=list)
             original_content: str = content
             context_related: Optional[bool] = None
 
         try:
             parsed = UnderstandingModel(**understanding)
-            understanding = parsed.model_dump()
+            # 合并保留 LLM 可能输出的额外字段（如 conversation_act/update_existing/occurred_at 等）
+            understanding = {**understanding, **parsed.model_dump()}
         except ValidationError as ve:
             logger.warning("llm.light.parse.validation_error", trace_id=trace_id, error=str(ve), raw=understanding)
             understanding.setdefault('entities', {})
@@ -898,6 +1022,19 @@ class AIEngine:
             understanding.setdefault('missing_fields', [])
             understanding.setdefault('clarification_questions', [])
             understanding.setdefault('suggested_actions', [])
+        # 归一化：将 suggested_actions 中的字符串项转换为对象 {"text": "..."}
+        try:
+            _sa2 = understanding.get('suggested_actions')
+            if isinstance(_sa2, list):
+                _norm2: List[Dict[str, Any]] = []
+                for _item2 in _sa2:
+                    if isinstance(_item2, str):
+                        _norm2.append({'text': _item2})
+                    elif isinstance(_item2, dict):
+                        _norm2.append(_item2)
+                understanding['suggested_actions'] = _norm2
+        except Exception:
+            pass
         understanding['original_content'] = content
         return understanding
     
@@ -1040,8 +1177,18 @@ class AIEngine:
             'channel': (context or {}).get('channel') if context else None,
             'timestamp': datetime.now().isoformat()
         }
-        user_ai = {**common, 'role': 'user', 'intent': understanding.get('intent'), 'entities': understanding.get('entities', {})}
-        assistant_ai = {**common, 'role': 'assistant', 'intent': understanding.get('intent'), 'entities': understanding.get('entities', {})}
+        # 额外持久化关键澄清/更新相关字段，供后续多轮合并使用
+        extra_fields = {
+            'need_action': understanding.get('need_action'),
+            'need_clarification': understanding.get('need_clarification'),
+            'missing_fields': understanding.get('missing_fields'),
+            'clarification_questions': understanding.get('clarification_questions'),
+            'conversation_act': understanding.get('conversation_act'),
+            'update_existing': understanding.get('update_existing'),
+            'occurred_at': understanding.get('occurred_at') or (understanding.get('entities') or {}).get('occurred_at'),
+        }
+        user_ai = {**common, 'role': 'user', 'intent': understanding.get('intent'), 'entities': understanding.get('entities', {}), **extra_fields}
+        assistant_ai = {**common, 'role': 'assistant', 'intent': understanding.get('intent'), 'entities': understanding.get('entities', {}), **extra_fields}
         # 使用批量存储，且不强制生成 embedding（可后台重嵌）
         memories = [
             {"content": user_message, "ai_data": user_ai, "user_id": user_id},
@@ -1569,3 +1716,137 @@ class AIEngine:
             logger.error(f"Error in reminder task: {e}")
         
         return sent_reminders 
+
+    async def _reduce_thread_state(
+        self,
+        *,
+        current_understanding: Dict[str, Any],
+        user_id: str,
+        context: Optional[Dict[str, Any]],
+        trace_id: str,
+    ) -> Dict[str, Any]:
+        """使用 LLM 将本轮理解与历史状态归纳为新的线程状态（泛化多轮合并）。"""
+        thread_id = (context or {}).get('thread_id') if context else None
+        channel = (context or {}).get('channel') if context else None
+        # 取当前线程最近的 thread_state
+        prev_state: Dict[str, Any] = {}
+        if thread_id:
+            try:
+                res = await self._call_mcp_tool(
+                    'search',
+                    query='',
+                    user_id=user_id,
+                    filters={'jsonb_equals': {'external_id': f'thread_state:{thread_id}', 'type': 'thread_state'}, 'limit': 1, 'thread_id': thread_id, 'channel': channel}
+                )
+                for r in res:
+                    if isinstance(r, dict) and not r.get('_meta'):
+                        prev_state = r.get('ai_understanding') or {}
+                        break
+            except Exception:
+                prev_state = {}
+
+        # 准备上下文：最近交互和摘要（预算较小）
+        recent_memories, semantic_related, thread_summaries = await self._build_context_via_batch_search(
+            user_id=user_id,
+            query=current_understanding.get('original_content', ''),
+            thread_id=thread_id,
+            shared_thread=False,
+            channel=channel,
+            include_semantic=False,
+            trace_id=trace_id,
+        )
+        history_context = ''
+        try:
+            parts: List[str] = []
+            def _fmt(items: List[Dict[str, Any]], title: str, max_chars: int) -> str:
+                if not items:
+                    return ''
+                lines: List[str] = []
+                for i, m in enumerate(items[:8], 1):
+                    line = f"\n{i}. {(m.get('time') or '')}: {m.get('content','')[:120]}"
+                    lines.append(line)
+                    if len(''.join(lines)) > max_chars:
+                        break
+                return (f"\n\n{title}:" + ''.join(lines)) if lines else ''
+            s1 = _fmt(thread_summaries, '会话摘要', 400)
+            s2 = _fmt(recent_memories, '最近对话片段', 1200)
+            history_context = (s1 + s2)[:1600]
+        except Exception:
+            history_context = ''
+
+        # 构建归纳提示
+        try:
+            system_prompt = await prompt_manager.get_system_prompt_with_tools()
+        except Exception:
+            system_prompt = prompt_manager.get_system_prompt()
+        reducer_task = prompt_manager.get_thread_state_task_prompt() or ''
+        reducer_user = prompt_manager.get_thread_state_user_prompt(
+            previous_state=json.dumps(prev_state, ensure_ascii=False),
+            current_understanding=json.dumps(current_understanding, ensure_ascii=False),
+            history_context=history_context,
+        )
+
+        # 让 LLM 输出新的状态 JSON（尽量保留通用字段）
+        try:
+            new_state = await self.llm.chat_json(
+                system_prompt=system_prompt + ("\n\n" + reducer_task if reducer_task else ''),
+                user_prompt=reducer_user,
+                temperature=0.2,
+                max_tokens=600,
+            )
+            if not isinstance(new_state, dict):
+                new_state = {}
+        except Exception:
+            try:
+                raw = await self.llm.chat_text(
+                    system_prompt=system_prompt + ("\n\n" + reducer_task if reducer_task else ''),
+                    user_prompt=reducer_user,
+                    temperature=0.2,
+                    max_tokens=600,
+                )
+                import json as _json
+                new_state = _json.loads(raw)
+            except Exception:
+                new_state = {}
+
+        # 兜底：至少包含基础字段，且保留必要的 thread_id/channel
+        def _ensure(d: Dict[str, Any]) -> Dict[str, Any]:
+            out = dict(d or {})
+            out.setdefault('intent', current_understanding.get('intent'))
+            out.setdefault('entities', current_understanding.get('entities', {}))
+            out.setdefault('need_action', current_understanding.get('need_action', False))
+            out.setdefault('need_clarification', current_understanding.get('need_clarification', False))
+            out.setdefault('missing_fields', current_understanding.get('missing_fields', []))
+            out.setdefault('clarification_questions', current_understanding.get('clarification_questions', []))
+            out.setdefault('original_content', current_understanding.get('original_content'))
+            # 元信息
+            out.setdefault('type', 'thread_state')
+            out.setdefault('thread_id', thread_id)
+            out.setdefault('channel', channel)
+            return out
+
+        return _ensure(new_state)
+
+    async def _persist_thread_state(self, *, user_id: str, context: Optional[Dict[str, Any]], state: Dict[str, Any], trace_id: str) -> None:
+        """持久化线程状态（幂等）：external_id=thread_state:<thread_id>。"""
+        thread_id = (context or {}).get('thread_id') if context else None
+        if not thread_id:
+            return
+        external_id = f'thread_state:{thread_id}'
+        # 先查是否已存在
+        existing = await self._call_mcp_tool(
+            'search',
+            query='',
+            user_id=user_id,
+            filters={'jsonb_equals': {'external_id': external_id, 'type': 'thread_state'}, 'limit': 1, 'thread_id': thread_id}
+        )
+        mem_id: Optional[str] = None
+        for r in existing:
+            if isinstance(r, dict) and not r.get('_meta'):
+                mem_id = r.get('id')
+                break
+        ai_data = {**state, 'external_id': external_id, 'type': 'thread_state', 'thread_id': thread_id, 'trace_id': trace_id}
+        if mem_id:
+            await self._call_mcp_tool('update_memory_fields', memory_id=mem_id, fields={'ai_understanding': ai_data})
+        else:
+            await self._call_mcp_tool('store', content='[thread_state]', ai_data=ai_data, user_id=user_id)

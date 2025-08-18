@@ -9,6 +9,16 @@
 - 主要变量：`POSTGRES_PASSWORD`、`OPENAI_API_KEY`、`SECRET_KEY`。
 
 ```bash
+brew install colima
+brew install docker docker-compose
+colima start
+colima stop
+colima stop --force
+colima delete
+colima status
+
+
+
 # 检查当前 compose 版本
 docker compose version
 

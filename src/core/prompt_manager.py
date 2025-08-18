@@ -208,6 +208,13 @@ class PromptManager:
         # 将 payload 序列化注入 user prompt
         user = self.get_dynamic_prompt('followup_classifier_user', payload=json.dumps(payload, ensure_ascii=False))
         return system, user
+
+    # 线程状态归纳（Reducer）动态提示
+    def get_thread_state_task_prompt(self) -> str:
+        return self.get_dynamic_prompt('thread_state_task')
+
+    def get_thread_state_user_prompt(self, **kwargs) -> str:
+        return self.get_dynamic_prompt('thread_state_user_prompt', **kwargs)
     
     async def _fetch_mcp_tools(self) -> List[Dict[str, Any]]:
         """从 MCP server 获取可用工具列表"""

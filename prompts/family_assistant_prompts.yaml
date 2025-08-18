@@ -254,6 +254,35 @@ blocks:
     
     要求：仅输出一个 JSON 对象作为结果（不包含解释性文本）。
 
+  # 线程状态归纳（Reducer）任务：统一处理澄清/更正/细化/补充/撤回/新主题
+  thread_state_task: |
+    你是对话“线程状态”的归纳器。基于“上一次状态 previous_state”、“本轮理解 current_understanding”和“简要历史 history_context”，输出新的线程状态 JSON。
+    
+    目标：
+    - 泛化支持：clarification（澄清）、correction（更正）、refinement（细化）、add_detail（补充）、retract（撤回）、new_topic（新主题）
+    - 自动对齐并合并实体，必要时覆盖前值（如 person 从“儿子”改为“女儿”）
+    - 标注 conversation_act（上述之一）与 update_existing（bool）
+    - 当信息缺失时，仅保留 need_clarification=true 与一个最关键 missing_fields
+    - 尽量填入 occurred_at（ISO）、thread_id、channel；保留 original_content
+    
+    输出字段建议（开放，不强制）：
+    intent, entities, need_action, need_clarification, missing_fields, clarification_questions,
+    conversation_act, update_existing, occurred_at, original_content, type='thread_state', thread_id, channel
+    
+    仅输出 JSON，不要解释。
+
+  thread_state_user_prompt: |
+    上一次状态：
+    {previous_state}
+    
+    本轮理解：
+    {current_understanding}
+    
+    简要历史：
+    {history_context}
+    
+    请输出新的线程状态 JSON（严格 JSON 格式）。
+
   # 轻量“跟进分类器”提示（供引擎在 _classify_followup 中使用）
   followup_classifier_system: |
     你是一个轻量分类器，任务：判断用户是否在补充上一步澄清所缺字段。

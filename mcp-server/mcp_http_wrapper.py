@@ -3,6 +3,7 @@
 MCP HTTP 包装器 - 提供HTTP接口来调用MCP工具
 """
 from fastapi import FastAPI, HTTPException
+import inspect
 from pydantic import BaseModel
 from typing import Dict, Any
 import os
@@ -60,18 +61,23 @@ async def call_tool(tool_name: str, request: Dict[str, Any]):
             'batch_search': mcp_server._batch_search,
             'update_memory_fields': mcp_server._update_memory_fields,
             'soft_delete': mcp_server._soft_delete,
-            'reembed_memories': mcp_server._reembed_memories
+            'reembed_memories': mcp_server._reembed_memories,
+            'render_chart': mcp_server._render_chart,
         }
         
-        # 动态扩展：render_chart
-        if tool_name == 'render_chart':
-            return await mcp_server._render_chart(**request)
         if tool_name not in tool_handlers:
             raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
         
         # 调用工具
         handler = tool_handlers[tool_name]
-        result = await handler(**request)
+        # 仅保留目标处理函数签名中声明的参数，忽略诸如 trace_id 等多余字段
+        try:
+            sig = inspect.signature(handler)
+            allowed = set(sig.parameters.keys())
+            filtered_args = {k: v for k, v in (request or {}).items() if k in allowed}
+        except Exception:
+            filtered_args = request or {}
+        result = await handler(**filtered_args)
         
         return result
         
