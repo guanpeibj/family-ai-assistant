@@ -33,14 +33,15 @@ class Settings(BaseSettings):
     AI_PROVIDER: str = Field(default="openai_compatible", description="llm 提供商标识：openai_compatible/anthropic/mock")
     OPENAI_EMBEDDING_MODEL: str = Field(default="text-embedding-3-small", description="用于生成语义向量的模型名")
     # LLM 限流与预算
-    LLM_RPM_LIMIT: int = Field(default=3, description="全局每分钟最大 LLM 调用次数（RPM）")
-    LLM_CONCURRENCY: int = Field(default=1, description="并发的 LLM 调用上限（信号量）")
+    LLM_RPM_LIMIT: int = Field(default=30, description="全局每分钟最大 LLM 调用次数（RPM）")
+    LLM_CONCURRENCY: int = Field(default=3, description="并发的 LLM 调用上限（信号量）")
     LOW_LLM_BUDGET: bool = Field(default=False, description="低预算模式：跳过/延后部分 LLM 环节以减少调用次数")
+    LLM_MAX_RETRIES: int = Field(default=1, description="LLM调用最大重试次数（降低减少API消耗）")
     LLM_BACKOFF_BASE_SECONDS: float = Field(default=1.0, description="遭遇429/5xx时的退避起始秒数（指数退避基数）")
     LLM_COOLDOWN_SECONDS: float = Field(default=20.0, description="发生限流后进入降级/冷却的时长")
     LLM_ENABLE_CACHE: bool = Field(default=True, description="是否启用小型结果缓存以去重相同请求")
-    LLM_CACHE_TTL_SECONDS: float = Field(default=10.0, description="结果缓存TTL（秒）")
-    LLM_CACHE_MAX_ITEMS: int = Field(default=256, description="结果缓存最大条目数（进程内）")
+    LLM_CACHE_TTL_SECONDS: float = Field(default=30.0, description="结果缓存TTL（秒）")
+    LLM_CACHE_MAX_ITEMS: int = Field(default=512, description="结果缓存最大条目数（进程内）")
     # 向量提供方（默认使用本地开源 fastembed）
     EMBED_PROVIDER: str = Field(default="local_fastembed", description="embedding 提供方：local_fastembed/openai_compatible")
     FASTEMBED_MODEL: str = Field(default="BAAI/bge-small-zh-v1.5", description="fastembed 本地向量模型名（建议 bge-small/m3e/gte small/base 级别）")
@@ -61,6 +62,7 @@ class Settings(BaseSettings):
     # 安全设置
     SECRET_KEY: str
     ALLOWED_USERS: List[str] = Field(default_factory=list)
+    FAMILY_SHARED_USER_IDS: List[str] = Field(default_factory=list, description="家庭共享的用户ID列表，默认家庭范围统计使用")
     
     # 日志
     LOG_LEVEL: str = Field(default="INFO", pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
@@ -74,6 +76,13 @@ class Settings(BaseSettings):
         if isinstance(self.ALLOWED_USERS, str):
             return [u.strip() for u in self.ALLOWED_USERS.split(",") if u.strip()]
         return self.ALLOWED_USERS
+
+    def get_family_shared_user_ids(self) -> List[str]:
+        """获取家庭共享的用户ID配置"""
+        ids = self.FAMILY_SHARED_USER_IDS
+        if isinstance(ids, str):
+            return [v.strip() for v in ids.split(',') if v.strip()]
+        return list(ids)
 
 
 # 创建全局配置实例

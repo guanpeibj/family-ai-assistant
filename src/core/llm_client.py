@@ -76,6 +76,71 @@ class LLMClient:
             LLMClient._resp_cache: Dict[str, tuple[float, Any]] = {}
         if not hasattr(LLMClient, "_cooldown_until"):
             LLMClient._cooldown_until = 0.0
+        
+        # 预加载标记
+        self._embedding_preloaded = False
+        
+        # 检查模型是否已经预下载到缓存目录
+        if self._embed_provider == "local_fastembed":
+            import os
+            cache_path = os.environ.get('FASTEMBED_CACHE_PATH', '/data/fastembed_cache')
+            model_cache_dir = os.path.join(cache_path, 'models')
+            if os.path.exists(model_cache_dir):
+                # 检查是否有模型文件
+                import glob
+                model_files = glob.glob(os.path.join(model_cache_dir, '**', '*'), recursive=True)
+                if len(model_files) > 5:  # 如果缓存目录有足够的文件，认为模型已预下载
+                    self._embedding_preloaded = True
+                    logger = getattr(self, '_logger', None)
+                    if logger:
+                        logger.info(f"FastEmbed model cache detected with {len(model_files)} files, skipping download")
+
+    async def warmup_embedding_model(self) -> bool:
+        """预热embedding模型，避免首次请求时的下载延迟"""
+        if self._embedding_preloaded:
+            return True
+            
+        if self._embed_provider == "local_fastembed":
+            # 检查模型是否已经加载
+            if self._fastembed_model is not None:
+                self._embedding_preloaded = True
+                return True
+                
+            # 尝试多次加载模型，包含重试机制
+            for attempt in range(3):  # 最多重试3次
+                try:
+                    import asyncio
+                    # 在线程池中加载模型，避免阻塞主线程
+                    loop = asyncio.get_event_loop()
+                    
+                    def _load_model():
+                        from fastembed import TextEmbedding
+                        self._fastembed_model = TextEmbedding(model_name=self._fastembed_model_name)
+                        return True
+                    
+                    # 异步执行模型加载
+                    success = await loop.run_in_executor(None, _load_model)
+                    self._embedding_preloaded = True
+                    return success
+                    
+                except Exception as e:
+                    logger = getattr(self, '_logger', None) 
+                    if logger:
+                        logger.warning(f"Failed to preload embedding model (attempt {attempt + 1}): {e}")
+                    
+                    if attempt < 2:  # 如果不是最后一次，等待后重试
+                        await asyncio.sleep(3 + attempt * 2)  # 3s, 5s, 7s
+                        continue
+                    
+                    # 模型加载失败，但不影响应用启动
+                    logger = getattr(self, '_logger', None)
+                    if logger:
+                        logger.warning(f"FastEmbed model preload failed after all retries. Will fallback to runtime loading or OpenAI embedding.")
+                    return False
+        
+        # 非fastembed模式，无需预热
+        self._embedding_preloaded = True
+        return True
 
     async def chat_json(
         self,
@@ -94,7 +159,7 @@ class LLMClient:
                 return hit
 
         if self.provider == "openai_compatible" and self._openai_client is not None:
-            attempts = 3
+            attempts = max(1, int(getattr(settings, 'LLM_MAX_RETRIES', 1)))
             for attempt in range(attempts):
                 await self._acquire_rate_slot()
                 try:
@@ -127,7 +192,7 @@ class LLMClient:
 
         if self.provider == "anthropic" and self._anthropic_client is not None:
             # Anthropic 支持 JSON 输出，但不同模型行为略有差异，这里做稳健解析
-            attempts = 3
+            attempts = max(1, int(getattr(settings, 'LLM_MAX_RETRIES', 1)))
             for attempt in range(attempts):
                 await self._acquire_rate_slot()
                 try:
@@ -170,25 +235,51 @@ class LLMClient:
         # 本地 fastembed（默认）
         if self._embed_provider == "local_fastembed":
             if self._fastembed_model is None:
-                try:
-                    from fastembed import TextEmbedding
-                    self._fastembed_model = TextEmbedding(model_name=self._fastembed_model_name)
-                except Exception as e:
-                    # 回退到 openai 兼容
-                    self._fastembed_model = None
+                # 尝试多次加载模型，包含重试机制
+                for attempt in range(3):  # 最多重试3次
+                    try:
+                        from fastembed import TextEmbedding
+                        # 如果没有预热过，这里会下载模型文件（可能耗时较长）
+                        # 建议在应用启动时调用 warmup_embedding_model() 预热
+                        self._fastembed_model = TextEmbedding(model_name=self._fastembed_model_name)
+                        break
+                    except Exception as e:
+                        # 记录错误但继续重试
+                        logger = getattr(self, '_logger', None)
+                        if logger:
+                            logger.warning(f"FastEmbed model loading attempt {attempt + 1} failed: {e}")
+                        
+                        if attempt < 2:  # 如果不是最后一次，等待后重试
+                            await asyncio.sleep(2 ** attempt)  # 指数退避：1s, 2s
+                            continue
+                        
+                        # 最后一次重试失败，回退到 openai 兼容
+                        if logger:
+                            logger.warning("FastEmbed model loading failed after all retries, falling back to OpenAI embedding")
+                        self._fastembed_model = None
+                        break
+                        
             if self._fastembed_model is not None:
                 # fastembed 同步接口，放在线程池可能更稳，这里小规模直接调用
-                vectors: list[list[float]] = []
-                for emb in self._fastembed_model.embed(texts):
-                    # emb 可能是 numpy.ndarray(float32)；需转为 Python float 以便 JSON 序列化
-                    try:
-                        vectors.append([float(x) for x in emb])
-                    except Exception:
-                        vectors.append([float(x) for x in list(emb)])
-                return vectors
+                try:
+                    vectors: list[list[float]] = []
+                    for emb in self._fastembed_model.embed(texts):
+                        # emb 可能是 numpy.ndarray(float32)；需转为 Python float 以便 JSON 序列化
+                        try:
+                            vectors.append([float(x) for x in emb])
+                        except Exception:
+                            vectors.append([float(x) for x in list(emb)])
+                    return vectors
+                except Exception as e:
+                    # 嵌入生成失败，清空模型实例并回退
+                    logger = getattr(self, '_logger', None)
+                    if logger:
+                        logger.warning(f"FastEmbed embedding generation failed: {e}, falling back to OpenAI")
+                    self._fastembed_model = None
+                    
         # 回退：openai 兼容
         if self.provider == "openai_compatible" and self._openai_client is not None:
-            attempts = 3
+            attempts = max(1, int(getattr(settings, 'LLM_MAX_RETRIES', 1)))
             for attempt in range(attempts):
                 await self._acquire_rate_slot()
                 try:
@@ -209,7 +300,10 @@ class LLMClient:
                     raise
                 finally:
                     self._release_rate_slot()
-        # 最后兜底：返回空
+        # 最后兜底：返回空或抛出异常
+        logger = getattr(self, '_logger', None)
+        if logger:
+            logger.error("All embedding methods failed, unable to generate embeddings")
         return []
 
     async def chat_text(
@@ -228,7 +322,7 @@ class LLMClient:
                 hit = self._cache_get(cache_key)
                 if hit is not None:
                     return hit
-            attempts = 3
+            attempts = max(1, int(getattr(settings, 'LLM_MAX_RETRIES', 1)))
             for attempt in range(attempts):
                 await self._acquire_rate_slot()
                 try:
@@ -264,7 +358,7 @@ class LLMClient:
                 hit = self._cache_get(cache_key)
                 if hit is not None:
                     return hit
-            attempts = 3
+            attempts = max(1, int(getattr(settings, 'LLM_MAX_RETRIES', 1)))
             for attempt in range(attempts):
                 await self._acquire_rate_slot()
                 try:

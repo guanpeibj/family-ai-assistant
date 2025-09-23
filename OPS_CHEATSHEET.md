@@ -169,6 +169,39 @@ curl -v http://faa-mcp:8000/health
 nc -zv postgres 5432
 ```
 
+### FastEmbed 模型下载问题排障
+```bash
+# 查看 FastEmbed 模型下载相关日志
+docker compose logs -f faa-api | grep -i "fastembed\|embedding\|model"
+
+# 检查 FastEmbed 缓存目录
+docker compose exec faa-api ls -la /data/fastembed_cache/
+
+# 手动测试模型下载（在容器内）
+docker compose exec faa-api python -c "
+from fastembed import TextEmbedding
+try:
+    model = TextEmbedding(model_name='BAAI/bge-small-zh-v1.5')
+    print('Model loaded successfully')
+    result = list(model.embed(['测试文本']))
+    print(f'Embedding generated, dimension: {len(result[0])}')
+except Exception as e:
+    print(f'Failed: {e}')
+"
+
+# 清理 FastEmbed 缓存（重新下载）
+docker compose down
+docker volume rm family-ai-assistant_fastembed_cache
+docker compose up -d --build
+
+# 检查网络连接（HuggingFace）
+docker compose exec faa-api ping -c 3 huggingface.co
+docker compose exec faa-api curl -I https://huggingface.co/api/models/BAAI/bge-small-zh-v1.5
+
+# 切换到 OpenAI embedding（紧急回退）
+# 在 .env 中设置：EMBED_PROVIDER=openai_compatible
+```
+
 ---
 
 ## Compose 变量与覆盖

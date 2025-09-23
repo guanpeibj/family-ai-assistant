@@ -1,62 +1,87 @@
 """
-Prompt版本管理器 - 支持动态加载和切换prompt版本
+Prompt版本管理器 - 支持动态加载、profile 覆写与工具信息注入
 """
-import yaml
-import os
-from typing import Dict, Any, Optional, List
-import json
-import structlog
-import httpx
+from __future__ import annotations
+
 import asyncio
+import json
+import os
+from copy import deepcopy
+from typing import Any, Dict, List, Optional
+
+import httpx
+import structlog
+import yaml
 
 logger = structlog.get_logger(__name__)
 
 
+FIELD_MAP = {
+    'system_blocks': 'system',
+    'understanding_blocks': 'understanding',
+    'response_blocks': 'response_generation',
+    'response_clarification_blocks': 'response_clarification',
+    'response_normal_blocks': 'response_normal',
+    'tool_planning_blocks': 'tool_planning',
+    'response_ack_blocks': 'response_ack',
+}
+
+DIRECT_FIELDS = {
+    'system',
+    'understanding',
+    'response_generation',
+    'response_clarification',
+    'response_normal',
+    'tool_planning',
+    'response_ack',
+}
+
+REQUIRED_FIELDS = {
+    'system': '',
+    'understanding': '',
+    'response_generation': '',
+    'response_clarification': '',
+    'response_normal': '',
+    'tool_planning': '',
+    'response_ack': '',
+}
+
+
 class PromptManager:
-    """管理不同版本的AI提示词"""
-    
-    def __init__(self, prompt_file: str = "prompts/family_assistant_prompts.yaml", mcp_url: str = None):
+    """管理不同版本的 AI 提示词配置。"""
+
+    def __init__(self, prompt_file: str = "prompts/family_assistant_prompts.yaml", mcp_url: str | None = None) -> None:
         self.prompt_file = prompt_file
-        self.prompts: Dict[str, Any] = {}
-        self.current_version: str = "v1_basic"
         self.mcp_url = mcp_url or os.getenv('MCP_SERVER_URL', 'http://faa-mcp:8000')
+        self.prompts: Dict[str, Dict[str, Any]] = {}
+        self.current_version: str = 'v1_basic'
+        self._blocks: Dict[str, str] = {}
         self._cached_tools: Optional[List[Dict[str, Any]]] = None
         self._load_prompts()
-    
-    def _load_prompts(self):
-        """从YAML文件加载prompts（支持 blocks/inherits/vars 拼装）。"""
+
+    # ------------------------------------------------------------------
+    # 加载与解析
+    # ------------------------------------------------------------------
+    def _load_prompts(self) -> None:
+        """从 YAML 文件加载 prompt 配置，并处理 blocks 与 profile 覆写。"""
         try:
-            # 获取项目根目录
             project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             prompt_path = os.path.join(project_root, self.prompt_file)
-            
+
             if not os.path.exists(prompt_path):
-                logger.warning(f"Prompt file not found: {prompt_path}, using defaults")
+                logger.warning("Prompt file missing, falling back to defaults", path=prompt_path)
                 self._use_defaults()
                 return
-            
+
             with open(prompt_path, 'r', encoding='utf-8') as f:
                 data = yaml.safe_load(f) or {}
 
             raw_prompts = data.get('prompts', {}) or {}
             current = data.get('current', 'v1_basic')
             vars_map = data.get('vars', {}) or {}
-            blocks = data.get('blocks', {}) or {}
-
-            def _assemble_text(block_keys: list[str] | None, fallback_key: str | None = None) -> str:
-                if block_keys and isinstance(block_keys, list):
-                    parts: list[str] = []
-                    for k in block_keys:
-                        txt = blocks.get(k, '')
-                        if txt:
-                            parts.append(str(txt).strip())
-                    return "\n\n".join(parts).strip()
-                if fallback_key and blocks.get(fallback_key):
-                    return str(blocks[fallback_key]).strip()
-                return ''
+            raw_blocks = data.get('blocks', {}) or {}
 
             def _interpolate(text: str) -> str:
-                # 极简模板替换：{{KEY}} -> vars_map[KEY]
                 if not text:
                     return text
                 out = text
@@ -64,297 +89,273 @@ class PromptManager:
                     out = out.replace(f"{{{{{k}}}}}", str(v))
                 return out
 
-            assembled: dict[str, dict[str, str]] = {}
-            # 先浅复制原 prompts，用于兼容旧结构
-            for name, cfg in raw_prompts.items():
-                assembled[name] = {
-                    'system': cfg.get('system', ''),
-                    'understanding': cfg.get('understanding', ''),
-                    'response_generation': cfg.get('response_generation', ''),
-                    'response_clarification': cfg.get('response_clarification', ''),
-                    'response_normal': cfg.get('response_normal', ''),
-                    'tool_planning': cfg.get('tool_planning', ''),
+            interpolated_blocks = {k: _interpolate(str(v)) for k, v in raw_blocks.items()}
+            self._blocks = interpolated_blocks
+
+            composed: Dict[str, Dict[str, Any]] = {}
+            cache: Dict[str, Dict[str, str]] = {}
+
+            def _assemble_text(keys: Optional[List[str]]) -> str:
+                if not keys:
+                    return ''
+                parts: List[str] = []
+                for key in keys:
+                    block = interpolated_blocks.get(key, '').strip()
+                    if block:
+                        parts.append(block)
+                return "\n\n".join(parts).strip()
+
+            processing: set[str] = set()
+
+            def _compose_components(name: str, cfg: Dict[str, Any]) -> Dict[str, str]:
+                if name in cache:
+                    return deepcopy(cache[name])
+                if name in processing:
+                    raise ValueError(f"Cyclic prompt inheritance detected: {name}")
+                processing.add(name)
+
+                base: Dict[str, str] = {}
+                parent_name = cfg.get('inherits')
+                if parent_name:
+                    parent_cfg = raw_prompts.get(parent_name)
+                    if parent_cfg:
+                        base = _compose_components(parent_name, parent_cfg)
+
+                base = deepcopy(base)
+
+                for field in DIRECT_FIELDS:
+                    if cfg.get(field):
+                        base[field] = _interpolate(cfg[field])
+
+                for block_key, field_name in FIELD_MAP.items():
+                    block_list = cfg.get(block_key)
+                    text = _assemble_text(block_list)
+                    if text:
+                        base[field_name] = _interpolate(text)
+
+                for field, default in REQUIRED_FIELDS.items():
+                    base.setdefault(field, default)
+
+                cache[name] = deepcopy(base)
+                processing.remove(name)
+                return deepcopy(base)
+
+            for prompt_name, cfg in raw_prompts.items():
+                components = _compose_components(prompt_name, cfg)
+                profiles_cfg = cfg.get('profiles') or {}
+                profile_prompts: Dict[str, Dict[str, str]] = {}
+                for profile_name, override_cfg in profiles_cfg.items():
+                    override_components = deepcopy(components)
+
+                    for field in DIRECT_FIELDS:
+                        if override_cfg.get(field):
+                            override_components[field] = _interpolate(override_cfg[field])
+
+                    for block_key, field_name in FIELD_MAP.items():
+                        block_list = override_cfg.get(block_key)
+                        text = _assemble_text(block_list)
+                        if text:
+                            override_components[field_name] = _interpolate(text)
+
+                    profile_prompts[profile_name] = override_components
+
+                composed[prompt_name] = {
+                    'meta': {
+                        'name': cfg.get('name', prompt_name),
+                        'description': cfg.get('description', ''),
+                    },
+                    'components': components,
+                    'profiles': profile_prompts,
                 }
-            # 处理 blocks/inherits 结构
-            for name, cfg in raw_prompts.items():
-                parent = cfg.get('inherits')
-                base = dict(assembled.get(parent, {})) if parent else {}
-                # 按 blocks 列表拼接
-                sys_txt = _assemble_text(cfg.get('system_blocks'), None)
-                und_txt = _assemble_text(cfg.get('understanding_blocks'), None)
-                rsp_txt = _assemble_text(cfg.get('response_blocks'), None)
-                rsp_clar_txt = _assemble_text(cfg.get('response_clarification_blocks'), None)
-                rsp_norm_txt = _assemble_text(cfg.get('response_normal_blocks'), None)
-                tpl_txt = _assemble_text(cfg.get('tool_planning_blocks'), None)
-                if sys_txt:
-                    base['system'] = sys_txt
-                if und_txt:
-                    base['understanding'] = und_txt
-                if rsp_txt:
-                    base['response_generation'] = rsp_txt
-                if rsp_clar_txt:
-                    base['response_clarification'] = rsp_clar_txt
-                if rsp_norm_txt:
-                    base['response_normal'] = rsp_norm_txt
-                if tpl_txt:
-                    base['tool_planning'] = tpl_txt
-                # 模板变量替换
-                for k in list(base.keys()):
-                    base[k] = _interpolate(base.get(k, ''))
-                assembled[name] = base
 
-            self.prompts = assembled
-            self.current_version = current if current in self.prompts else 'v1_basic'
-            if self.current_version != current:
-                logger.warning(f"Current version {current} not found, fallback to v1_basic")
-            logger.info(f"Loaded prompt version: {self.current_version}")
-            logger.info(f"current prompts: {self.prompts}")
+            if not composed:
+                logger.warning("Prompt file has no valid prompt entries, using defaults")
+                self._use_defaults()
+                return
 
-        except Exception as e:
-            logger.error(f"Error loading prompts: {e}")
+            self.prompts = composed
+            if current in composed:
+                self.current_version = current
+            else:
+                self.current_version = next(iter(composed.keys()))
+                logger.warning("Requested prompt version not found, using %s", self.current_version)
+
+            logger.info(
+                "Loaded prompt configurations",
+                available=list(self.prompts.keys()),
+                current=self.current_version,
+            )
+
+        except Exception as exc:
+            logger.error("Failed to load prompts, using defaults", error=str(exc))
             self._use_defaults()
-    
-    def _use_defaults(self):
-        """当YAML文件不可用时，使用最小化的兜底prompts"""
-        logger.warning("Using minimal fallback prompts - YAML configuration recommended")
+
+    def _use_defaults(self) -> None:
+        logger.warning("Using minimal fallback prompts - please provide YAML configuration")
         self.prompts = {
             'v1_basic': {
-                'name': '兜底版本',
-                'system': '你是一个家庭AI助手，帮助管理家庭事务。请查阅数据库获取家庭成员信息。',
-                'understanding': '',
-                'response_generation': '',
-                'tool_planning': '根据理解结果决定使用哪些工具。输出 JSON: {"steps": [{"tool": "store", "args": {...}}]}',
+                'meta': {'name': 'fallback', 'description': 'minimal prompt'},
+                'components': {
+                    'system': '你是一个家庭 AI 助手，帮助记录和检索家庭信息。',
+                    'understanding': '请输出 {"understanding": {...}, "context_requests": [], "tool_plan": {"steps": []}, "response_directives": {"profile": "default"}}',
+                    'response_generation': '根据执行结果生成简短确认回复。',
+                    'response_clarification': '说明缺少的信息并提出一个问题。',
+                    'response_normal': '用温和语气回复用户。',
+                    'tool_planning': '根据理解结果给出需要执行的工具步骤，JSON 格式。',
+                    'response_ack': '确认任务已完成。',
+                },
+                'profiles': {},
             }
         }
         self.current_version = 'v1_basic'
-    
-    def get_system_prompt(self) -> str:
-        """获取当前版本的系统提示词"""
-        current = self.prompts.get(self.current_version, {})
-        return current.get('system', self.prompts['v1_basic']['system'])
-    
-    def get_understanding_prompt(self) -> str:
-        """获取消息理解的提示词"""
-        current = self.prompts.get(self.current_version, {})
-        return current.get('understanding', '')
-    
-    def get_response_prompt(self) -> str:
-        """获取回复生成的提示词"""
-        current = self.prompts.get(self.current_version, {})
-        return current.get('response_generation', '')
-    
-    def get_response_clarification_prompt(self) -> str:
-        """获取澄清询问专用提示词（如定义）"""
-        current = self.prompts.get(self.current_version, {})
-        return current.get('response_clarification', '')
-    
-    def get_response_normal_prompt(self) -> str:
-        """获取正常回复专用提示词（如定义）"""
-        current = self.prompts.get(self.current_version, {})
-        return current.get('response_normal', '')
-    
-    def get_tool_planning_prompt(self) -> str:
-        """获取工具编排提示词"""
-        current = self.prompts.get(self.current_version, {})
-        return current.get('tool_planning', '')
-    
-    def get_dynamic_prompt(self, prompt_name: str, **kwargs) -> str:
-        """获取动态格式化的提示词"""
-        # 从 blocks 中获取指定的 prompt 模板
-        try:
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            prompt_path = os.path.join(project_root, self.prompt_file)
-            
-            if not os.path.exists(prompt_path):
-                return ""
-            
-            with open(prompt_path, 'r', encoding='utf-8') as f:
-                data = yaml.safe_load(f) or {}
-            
-            blocks = data.get('blocks', {}) or {}
-            template = blocks.get(prompt_name, '')
-            
-            if template and kwargs:
+
+    # ------------------------------------------------------------------
+    # Prompt 获取
+    # ------------------------------------------------------------------
+    def _current_entry(self) -> Dict[str, Any]:
+        return self.prompts.get(self.current_version, {})
+
+    def _components_for_profile(self, profile: Optional[str] = None) -> Dict[str, str]:
+        entry = self._current_entry()
+        base = entry.get('components', {})
+        if profile:
+            profile_map = entry.get('profiles', {}) or {}
+            override = profile_map.get(profile)
+            if override:
+                return override
+        return base
+
+    def get_system_prompt(self, profile: Optional[str] = None) -> str:
+        components = self._components_for_profile(profile)
+        fallback = self.prompts.get('v1_basic', {}).get('components', {}).get('system', '')
+        return components.get('system') or fallback
+
+    def get_understanding_prompt(self, profile: Optional[str] = None) -> str:
+        components = self._components_for_profile(profile)
+        return components.get('understanding', '')
+
+    def get_response_prompt(self, profile: Optional[str] = None) -> str:
+        components = self._components_for_profile(profile)
+        return components.get('response_generation', '')
+
+    def get_response_clarification_prompt(self, profile: Optional[str] = None) -> str:
+        components = self._components_for_profile(profile)
+        return components.get('response_clarification', '')
+
+    def get_response_normal_prompt(self, profile: Optional[str] = None) -> str:
+        components = self._components_for_profile(profile)
+        return components.get('response_normal', '')
+
+    def get_tool_planning_prompt(self, profile: Optional[str] = None) -> str:
+        components = self._components_for_profile(profile)
+        return components.get('tool_planning', '')
+
+    def get_ack_prompt(self, profile: Optional[str] = None) -> str:
+        components = self._components_for_profile(profile)
+        return components.get('response_ack', '')
+
+    def get_dynamic_block(self, block_name: str, **kwargs) -> str:
+        template = self._blocks.get(block_name, '')
+        if not template:
+            return ''
+        if kwargs:
+            try:
                 return template.format(**kwargs)
-            return template
-            
-        except Exception as e:
-            logger.error(f"Error getting dynamic prompt {prompt_name}: {e}")
-            return ""
-    
-    def get_message_understanding_prompt(self, **kwargs) -> str:
-        """获取消息理解提示词"""
-        return self.get_dynamic_prompt('message_understanding', **kwargs)
-    
-    def get_clarification_task_prompt(self, **kwargs) -> str:
-        """获取澄清任务提示词"""
-        return self.get_dynamic_prompt('clarification_response_task', **kwargs)
-    
-    def get_clarification_user_prompt(self, **kwargs) -> str:
-        """获取澄清用户提示词"""
-        return self.get_dynamic_prompt('clarification_user_prompt', **kwargs)
-    
-    def get_normal_task_prompt(self, **kwargs) -> str:
-        """获取正常回复任务提示词"""
-        return self.get_dynamic_prompt('normal_response_task', **kwargs)
-    
-    def get_normal_user_prompt(self, **kwargs) -> str:
-        """获取正常回复用户提示词"""
-        return self.get_dynamic_prompt('normal_response_user_prompt', **kwargs)
+            except Exception as exc:
+                logger.error("Failed to format block", block=block_name, error=str(exc))
+                return template
+        return template
 
-    def get_followup_classifier_prompts(self, *, payload: dict) -> tuple[str, str]:
-        """获取跟进分类器的 system/user 提示词。"""
-        system = self.get_dynamic_prompt('followup_classifier_system')
-        # 将 payload 序列化注入 user prompt
-        user = self.get_dynamic_prompt('followup_classifier_user', payload=json.dumps(payload, ensure_ascii=False))
-        return system, user
-
-    # 线程状态归纳（Reducer）动态提示
-    def get_thread_state_task_prompt(self) -> str:
-        return self.get_dynamic_prompt('thread_state_task')
-
-    def get_thread_state_user_prompt(self, **kwargs) -> str:
-        return self.get_dynamic_prompt('thread_state_user_prompt', **kwargs)
-    
+    # ------------------------------------------------------------------
+    # 工具信息注入
+    # ------------------------------------------------------------------
     async def _fetch_mcp_tools(self) -> List[Dict[str, Any]]:
-        """从 MCP server 获取可用工具列表"""
         if self._cached_tools is not None:
             return self._cached_tools
-        
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.get(f"{self.mcp_url}/tools", timeout=5.0)
-                response.raise_for_status()
-                data = response.json()
+                resp = await client.get(f"{self.mcp_url}/tools", timeout=5.0)
+                resp.raise_for_status()
+                data = resp.json() or {}
                 tools = data.get('tools', [])
                 self._cached_tools = tools
-                logger.info(f"Fetched {len(tools)} tools from MCP server")
+                logger.info("Fetched tools metadata", count=len(tools))
                 return tools
-        except Exception as e:
-            logger.warning(f"Failed to fetch tools from MCP server: {e}")
+        except Exception as exc:
+            logger.warning("Failed to fetch tools metadata", error=str(exc))
             return []
-    
-    def _format_tool_list(self, tools: List[Dict[str, Any]]) -> str:
-        """格式化工具列表为 prompt 文本"""
+
+    @staticmethod
+    def _format_tool_list(tools: List[Dict[str, Any]]) -> str:
         if not tools:
-            return (
-                "工具列表获取失败，请检查 MCP server 连接。\n"
-                "降级指引：\n"
-                "- 查询：尽量使用 filters.limit + 日期范围；无法获取向量则退化到 trigram 或时间排序。\n"
-                "- 统计：优先尝试 aggregate；报错时使用 search 拉取样本给出定性总结。\n"
-                "- 存储/提醒：确保关键信息齐全后再调用，缺失即先澄清。"
-            )
-        
+            return "(当前无法获取工具清单，继续按已有知识完成任务。)"
         lines = []
         for tool in tools:
             name = tool.get('name', 'unknown')
-            desc = tool.get('description', '')
-            params = tool.get('parameters', [])
-            latency = tool.get('x_latency_hint')
-            time_budget = tool.get('x_time_budget')
-            idempotent = (tool.get('x_capabilities') or {}).get('idempotent')
-            
-            # 格式化参数列表
+            desc = tool.get('description') or ''
+            params = tool.get('parameters') or []
+            detail = f"- {name}: {desc}".strip()
             if params:
-                param_str = ', '.join(params)
-                meta = []
-                if latency:
-                    meta.append(f"延迟:{latency}")
-                if isinstance(time_budget, (int, float)):
-                    meta.append(f"预算:{time_budget}s")
-                if idempotent is not None:
-                    meta.append(f"幂等:{'是' if idempotent else '否'}")
-                meta_str = f" [{' | '.join(meta)}]" if meta else ''
-                lines.append(f"- {name}: {desc} (参数: {param_str}){meta_str}")
-            else:
-                lines.append(f"- {name}: {desc}")
-        
-        return '\n'.join(lines)
-    
-    def _format_tool_specification(self, tools: List[Dict[str, Any]]) -> str:
-        """格式化详细的工具规格说明"""
+                detail += f" (参数: {', '.join(params)})"
+            lines.append(detail)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_tool_spec(tools: List[Dict[str, Any]]) -> str:
         if not tools:
-            return "工具规格获取失败，请检查 MCP server 连接"
-        
-        lines = []
+            return "(暂无工具规格详情)"
+        lines: List[str] = []
         for tool in tools:
             name = tool.get('name', 'unknown')
-            params = tool.get('parameters', [])
-            failures = tool.get('x_common_failures') or []
+            params = tool.get('parameters') or []
+            line = f"- {name}({', '.join(params)})" if params else f"- {name}()"
             notes = tool.get('x_notes')
-            
-            if params:
-                param_str = '{' + ', '.join(params) + '}'
-                lines.append(f"- {name}(args: {param_str})")
-            else:
-                lines.append(f"- {name}()")
-            if failures:
-                lines.append(f"  常见失败: {', '.join(failures)}")
             if notes:
-                lines.append(f"  说明: {notes}")
-        
-        return '\n'.join(lines)
-    
-    async def get_system_prompt_with_tools(self) -> str:
-        """获取包含动态工具信息的系统提示词"""
-        base_prompt = self.get_system_prompt()
-        
-        # 获取工具信息
+                line += f"\n  提示: {notes}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    async def get_system_prompt_with_tools(self, profile: Optional[str] = None) -> str:
+        base_prompt = self.get_system_prompt(profile)
         tools = await self._fetch_mcp_tools()
         tool_list = self._format_tool_list(tools)
-        
-        # 替换工具列表占位符
         if '{{DYNAMIC_TOOLS}}' in base_prompt:
             return base_prompt.replace('{{DYNAMIC_TOOLS}}', tool_list)
-        
-        # 如果没有占位符，直接在末尾添加
-        return base_prompt + f"\n\n你有以下工具可以使用：\n{tool_list}"
-    
-    async def get_tool_planning_prompt_with_tools(self) -> str:
-        """获取包含动态工具信息的工具编排提示词"""
-        base_prompt = self.get_tool_planning_prompt()
-        
-        # 获取工具信息
+        return f"{base_prompt}\n\n可用工具概览:\n{tool_list}" if base_prompt else tool_list
+
+    async def get_tool_planning_prompt_with_tools(self, profile: Optional[str] = None) -> str:
+        base_prompt = self.get_tool_planning_prompt(profile)
         tools = await self._fetch_mcp_tools()
-        tool_spec = self._format_tool_specification(tools)
-        
-        # 替换工具规格占位符
+        tool_spec = self._format_tool_spec(tools)
         if '{{DYNAMIC_TOOL_SPECS}}' in base_prompt:
             return base_prompt.replace('{{DYNAMIC_TOOL_SPECS}}', tool_spec)
-        
-        # 如果没有占位符，直接在开头添加
-        return f"可用工具：\n{tool_spec}\n\n{base_prompt}"
-    
-    def clear_tools_cache(self):
-        """清除工具缓存，强制重新获取"""
+        return f"可用工具规格:\n{tool_spec}\n\n{base_prompt}" if base_prompt else tool_spec
+
+    def clear_tools_cache(self) -> None:
         self._cached_tools = None
-        logger.info("Cleared tools cache")
-    
+        logger.info("Cleared MCP tool cache")
+
+    # ------------------------------------------------------------------
+    # 管理接口
+    # ------------------------------------------------------------------
     def switch_version(self, version: str) -> bool:
-        """切换到指定版本的prompt"""
         if version in self.prompts:
             self.current_version = version
-            logger.info(f"Switched to prompt version: {version}")
+            logger.info("Switched prompt version", version=version)
             return True
-        else:
-            logger.warning(f"Prompt version not found: {version}")
-            return False
-    
+        logger.warning("Prompt version not found", version=version)
+        return False
+
     def list_versions(self) -> Dict[str, Dict[str, str]]:
-        """列出所有可用的prompt版本"""
         return {
-            version: {
-                'name': data.get('name', version),
-                'description': data.get('description', '')
-            }
-            for version, data in self.prompts.items()
+            version: dict(entry.get('meta') or {'name': version, 'description': ''})
+            for version, entry in self.prompts.items()
         }
-    
-    def reload(self):
-        """重新加载prompt配置"""
+
+    def reload(self) -> None:
         logger.info("Reloading prompt configuration")
+        self._cached_tools = None
         self._load_prompts()
 
 
-# 全局实例
-prompt_manager = PromptManager() 
+prompt_manager = PromptManager()

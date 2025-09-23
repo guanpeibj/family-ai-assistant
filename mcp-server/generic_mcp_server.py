@@ -5,7 +5,7 @@
 import asyncio
 import json
 import os
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 from datetime import datetime
 import uuid
 import os
@@ -118,29 +118,31 @@ class GenericMCPServer:
                     # 构建查询
                     if shared_thread_mode:
                         sql = """
-                        SELECT id, content, ai_understanding, amount, occurred_at,
+                        SELECT id, content, ai_understanding, amount, occurred_at, user_id,
                                1 - (embedding <=> $1::vector) as similarity
                         FROM memories
                         WHERE embedding IS NOT NULL
+                          AND COALESCE(ai_understanding->>'deleted','false') <> 'true'
                         """
                         params = [query_embedding_text]
                     else:
                         sql = """
-                        SELECT id, content, ai_understanding, amount, occurred_at,
+                        SELECT id, content, ai_understanding, amount, occurred_at, user_id,
                                1 - (embedding <=> $1::vector) as similarity
                         FROM memories
                         WHERE user_id = $2 AND embedding IS NOT NULL
+                          AND COALESCE(ai_understanding->>'deleted','false') <> 'true'
                         """
                         params = [query_embedding_text, uid]
                     
-                    # 添加过滤条件
+                    # 添加过滤条件（优化版：优先使用计算列）
                     if filters:
-                        # thread_id/type 过滤（来自 ai_data 中）
+                        # thread_id/type 过滤（优化：优先使用计算列）
                         if 'thread_id' in filters:
-                            sql += f" AND (ai_understanding->>'thread_id') = ${len(params) + 1}"
+                            sql += f" AND thread_id_extracted = ${len(params) + 1}"
                             params.append(filters['thread_id'])
                         if 'type' in filters:
-                            sql += f" AND (ai_understanding->>'type') = ${len(params) + 1}"
+                            sql += f" AND type_extracted = ${len(params) + 1}"
                             params.append(filters['type'])
                         if 'channel' in filters:
                             sql += f" AND (ai_understanding->>'channel') = ${len(params) + 1}"
@@ -157,11 +159,41 @@ class GenericMCPServer:
                         if 'max_amount' in filters:
                             sql += f" AND amount <= ${len(params) + 1}"
                             params.append(filters['max_amount'])
-                        # JSONB 包含过滤（充分利用 GIN jsonb_path_ops 索引）：filters.jsonb_equals = {...}
+                        # JSONB 包含过滤（优化：对常用字段使用计算列）
                         je = filters.get('jsonb_equals') if isinstance(filters.get('jsonb_equals'), dict) else None
                         if je:
-                            sql += f" AND ai_understanding @> ${len(params) + 1}::jsonb"
-                            params.append(json.dumps(je))
+                            # 分别处理每个字段，优先使用计算列
+                            computed_col_filters = {}
+                            jsonb_filters = {}
+                            
+                            for k, v in je.items():
+                                if k in ['type', 'thread_id', 'category', 'person', 'metric', 'subject', 'source']:
+                                    computed_col_filters[k] = v
+                                else:
+                                    jsonb_filters[k] = v
+                            
+                            # 计算列过滤（更高效）- 支持所有高频字段
+                            for k, v in computed_col_filters.items():
+                                if k == 'type':
+                                    sql += f" AND type_extracted = ${len(params) + 1}"
+                                elif k == 'thread_id':
+                                    sql += f" AND thread_id_extracted = ${len(params) + 1}"
+                                elif k == 'category':
+                                    sql += f" AND category_extracted = ${len(params) + 1}"
+                                elif k == 'person':
+                                    sql += f" AND person_extracted = ${len(params) + 1}"
+                                elif k == 'metric':
+                                    sql += f" AND metric_extracted = ${len(params) + 1}"
+                                elif k == 'subject':
+                                    sql += f" AND subject_extracted = ${len(params) + 1}"
+                                elif k == 'source':
+                                    sql += f" AND source_extracted = ${len(params) + 1}"
+                                params.append(str(v))
+                            
+                            # 剩余JSONB过滤
+                            if jsonb_filters:
+                                sql += f" AND ai_understanding @> ${len(params) + 1}::jsonb"
+                                params.append(json.dumps(jsonb_filters))
                     
                     limit_value = 20
                     if filters and isinstance(filters.get('limit'), int) and filters['limit'] > 0:
@@ -177,14 +209,14 @@ class GenericMCPServer:
                     used_vector = False
                     if shared_thread_mode:
                         base_sql = """
-                        SELECT id, content, ai_understanding, amount, occurred_at
+                        SELECT id, content, ai_understanding, amount, occurred_at, user_id
                         FROM memories
                         WHERE TRUE
                         """
                         params = []
                     else:
                         base_sql = """
-                        SELECT id, content, ai_understanding, amount, occurred_at
+                        SELECT id, content, ai_understanding, amount, occurred_at, user_id
                         FROM memories
                         WHERE user_id = $1
                         """
@@ -201,11 +233,12 @@ class GenericMCPServer:
                         params.append(query)
                     
                     if filters:
+                        # 优先使用计算列过滤（更高效）
                         if 'thread_id' in filters:
-                            sql += f" AND (ai_understanding->>'thread_id') = ${len(params) + 1}"
+                            sql += f" AND thread_id_extracted = ${len(params) + 1}"
                             params.append(filters['thread_id'])
                         if 'type' in filters:
-                            sql += f" AND (ai_understanding->>'type') = ${len(params) + 1}"
+                            sql += f" AND type_extracted = ${len(params) + 1}"
                             params.append(filters['type'])
                         if 'channel' in filters:
                             sql += f" AND (ai_understanding->>'channel') = ${len(params) + 1}"
@@ -222,11 +255,40 @@ class GenericMCPServer:
                         if 'max_amount' in filters:
                             sql += f" AND amount <= ${len(params) + 1}"
                             params.append(filters['max_amount'])
-                        # JSONB 包含过滤
+                        # JSONB 包含过滤（优化版）
                         je = filters.get('jsonb_equals') if isinstance(filters.get('jsonb_equals'), dict) else None
                         if je:
-                            sql += f" AND ai_understanding @> ${len(params) + 1}::jsonb"
-                            params.append(json.dumps(je))
+                            computed_col_filters = {}
+                            jsonb_filters = {}
+                            
+                            for k, v in je.items():
+                                if k in ['type', 'thread_id', 'category', 'person', 'metric', 'subject', 'source']:
+                                    computed_col_filters[k] = v
+                                else:
+                                    jsonb_filters[k] = v
+                            
+                            # 计算列过滤
+                            for k, v in computed_col_filters.items():
+                                if k == 'type':
+                                    sql += f" AND type_extracted = ${len(params) + 1}"
+                                elif k == 'thread_id':
+                                    sql += f" AND thread_id_extracted = ${len(params) + 1}"
+                                elif k == 'category':
+                                    sql += f" AND category_extracted = ${len(params) + 1}"
+                                elif k == 'person':
+                                    sql += f" AND person_extracted = ${len(params) + 1}"
+                                elif k == 'metric':
+                                    sql += f" AND metric_extracted = ${len(params) + 1}"
+                                elif k == 'subject':
+                                    sql += f" AND subject_extracted = ${len(params) + 1}"
+                                elif k == 'source':
+                                    sql += f" AND source_extracted = ${len(params) + 1}"
+                                params.append(str(v))
+                            
+                            # JSONB过滤
+                            if jsonb_filters:
+                                sql += f" AND ai_understanding @> ${len(params) + 1}::jsonb"
+                                params.append(json.dumps(jsonb_filters))
                         if 'limit' in filters and isinstance(filters['limit'], int):
                             limit_value = min(max(filters['limit'], 1), 200)
                         else:
@@ -251,7 +313,8 @@ class GenericMCPServer:
                         "content": row['content'],
                         "ai_understanding": json.loads(row['ai_understanding']),
                         "amount": float(row['amount']) if row['amount'] else None,
-                        "occurred_at": row['occurred_at'].isoformat() if row['occurred_at'] else None
+                        "occurred_at": row['occurred_at'].isoformat() if row['occurred_at'] else None,
+                        "user_id": str(row['user_id'])
                     }
                     if 'similarity' in row:
                         result['similarity'] = float(row['similarity'])
@@ -318,15 +381,51 @@ class GenericMCPServer:
                 # 单条失败不影响整体
                 pass
     
-    async def _aggregate(self, user_id: str, operation: str, field: Optional[str], filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """对数据进行聚合统计"""
+    async def _aggregate(self, user_id: Union[str, List[str]], operation: str, field: Optional[str], filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        对数据进行聚合统计
+        
+        重要：财务统计时需要区分数据类型，避免混淆预算和支出：
+        - 支出统计: filters={"jsonb_equals": {"type": "expense"}}
+        - 收入统计: filters={"jsonb_equals": {"type": "income"}} 
+        - 预算查询: filters={"jsonb_equals": {"type": "budget"}}
+        - 分类统计: filters={"group_by_ai_field": "category"}
+        - 时间范围: filters={"date_from": "2025-08-01", "date_to": "2025-08-31"}
+        
+        常见错误：
+        - 统计支出时忘记排除预算，导致金额虚高
+        - 分类统计时没有使用 group_by_ai_field，无法获取分组数据
+        """
         try:
             async with self.pool.acquire() as conn:
-                uid = self._normalize_user_id(user_id)
-                await self._ensure_user(conn, uid)
+                if isinstance(user_id, (list, tuple, set)):
+                    raw_ids = [str(u) for u in user_id]
+                else:
+                    raw_ids = [str(user_id)]
+
+                normalized_ids: List[uuid.UUID] = []
+                for raw in raw_ids:
+                    try:
+                        norm = self._normalize_user_id(raw)
+                        normalized_ids.append(norm)
+                        await self._ensure_user(conn, norm)
+                    except Exception:
+                        return {"error": f"invalid_user_id: {raw}"}
+
+                params: List[Any] = []
+                if len(normalized_ids) == 1:
+                    user_condition = f"user_id = ${len(params) + 1}"
+                    params.append(normalized_ids[0])
+                else:
+                    user_condition = f"user_id = ANY(${len(params) + 1}::uuid[])"
+                    # asyncpg 允许直接传入 list[UUID]
+                    params.append(normalized_ids)
                 # 构建聚合查询
                 if operation not in ['sum', 'count', 'avg', 'min', 'max']:
                     return {"error": f"不支持的操作: {operation}"}
+
+                if operation != 'count' and not field:
+                    return {"error": "field is required for non-count aggregation"}
                 
                 # 分组支持
                 period = None
@@ -338,7 +437,6 @@ class GenericMCPServer:
                     agf = filters.get('group_by_ai_field')
                     if isinstance(agf, str) and agf:
                         ai_group_field = agf
-                params = [uid]
                 group_exprs = []
                 group_labels = []
                 if period:
@@ -355,26 +453,44 @@ class GenericMCPServer:
                         select_cols.append("COUNT(*) AS result")
                     else:
                         select_cols.append(f"{operation.upper()}({field}) AS result")
-                    sql = f"SELECT {', '.join(select_cols)} FROM memories WHERE user_id = $1"
+                    sql = f"SELECT {', '.join(select_cols)} FROM memories WHERE {user_condition}"
                 else:
                     if operation == 'count':
-                        sql = f"SELECT COUNT(*) as result FROM memories WHERE user_id = $1"
+                        sql = f"SELECT COUNT(*) as result FROM memories WHERE {user_condition}"
                     else:
-                        sql = f"SELECT {operation.upper()}({field}) as result FROM memories WHERE user_id = $1"
+                        sql = f"SELECT {operation.upper()}({field}) as result FROM memories WHERE {user_condition}"
                 
-                # 添加过滤条件
+                # 添加过滤条件（优化版：优先使用计算列）
                 if filters:
+                    # type过滤（优化：优先使用计算列索引）
+                    if 'type' in filters:
+                        sql += f" AND type_extracted = ${len(params) + 1}"
+                        params.append(filters['type'])
+                    # channel过滤
+                    if 'channel' in filters:
+                        sql += f" AND (ai_understanding->>'channel') = ${len(params) + 1}"
+                        params.append(filters['channel'])
+                    # 时间过滤（保持原样，有专用索引）
                     if 'date_from' in filters:
                         sql += f" AND occurred_at >= ${len(params) + 1}"
                         params.append(datetime.fromisoformat(filters['date_from']))
                     if 'date_to' in filters:
                         sql += f" AND occurred_at <= ${len(params) + 1}"
                         params.append(datetime.fromisoformat(filters['date_to']))
-                    # 通用 JSONB 等值过滤
+                    # 通用 JSONB 等值过滤（保持向后兼容）
                     je = filters.get('jsonb_equals') if isinstance(filters.get('jsonb_equals'), dict) else None
                     if je:
                         for k, v in je.items():
-                            sql += f" AND (ai_understanding->>'{k}') = ${len(params) + 1}"
+                            # 对高频字段使用计算列优化
+                            if k == 'type':
+                                sql += f" AND type_extracted = ${len(params) + 1}"
+                            elif k == 'category':
+                                sql += f" AND category_extracted = ${len(params) + 1}"
+                            elif k == 'thread_id':
+                                sql += f" AND thread_id_extracted = ${len(params) + 1}"
+                            else:
+                                # 其他字段使用JSONB查询
+                                sql += f" AND (ai_understanding->>'{k}') = ${len(params) + 1}"
                             params.append(str(v))
                 
                 # 对于非 count 操作，确保字段不为空
@@ -698,6 +814,602 @@ class GenericMCPServer:
                 return [{"id": str(r['id']), "content": r['content']} for r in rows]
         except Exception as e:
             return [{"error": str(e)}]
+
+    async def _get_expense_summary_optimized(self, user_id: Union[str, List[str]], date_from: Optional[str] = None, date_to: Optional[str] = None) -> Dict[str, Any]:
+        """
+        高效的财务统计函数，支持家庭统计（多用户）和单用户统计
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                # 智能处理用户ID：支持单用户和家庭（多用户）统计
+                if isinstance(user_id, str):
+                    user_ids = [self._normalize_user_id(user_id)]
+                else:
+                    user_ids = [self._normalize_user_id(uid) for uid in user_id]
+                
+                # 确保所有用户都存在
+                for uid in user_ids:
+                    await self._ensure_user(conn, uid)
+                
+                # 准备时间参数 - 智能处理日期边界
+                date_from_param = None
+                date_to_param = None
+                if date_from:
+                    date_from_param = datetime.fromisoformat(date_from)
+                if date_to:
+                    # 如果date_to只是日期格式（如"2025-08-19"），自动调整为当天结束时刻
+                    if len(date_to) == 10:  # YYYY-MM-DD格式
+                        date_to_param = datetime.fromisoformat(date_to + " 23:59:59")
+                    else:
+                        date_to_param = datetime.fromisoformat(date_to)
+                
+                # 智能处理多用户和单用户查询
+                if len(user_ids) == 1:
+                    # 单用户查询：直接调用数据库函数
+                    result = await conn.fetchrow(
+                        "SELECT * FROM get_expense_summary($1, $2, $3)",
+                        user_ids[0], date_from_param, date_to_param
+                    )
+                else:
+                    # 家庭统计（多用户）：合并多个用户的结果
+                    combined_results = {
+                        'total_amount': 0.0,
+                        'record_count': 0,
+                        'category_breakdown': {}
+                    }
+                    
+                    for uid in user_ids:
+                        user_result = await conn.fetchrow(
+                            "SELECT * FROM get_expense_summary($1, $2, $3)",
+                            uid, date_from_param, date_to_param
+                        )
+                        
+                        if user_result:
+                            # 累计总金额和记录数
+                            combined_results['total_amount'] += float(user_result['total_amount'] or 0)
+                            combined_results['record_count'] += int(user_result['record_count'] or 0)
+                            
+                            # 合并分类明细
+                            user_categories = user_result['category_breakdown'] or {}
+                            if isinstance(user_categories, str):
+                                try:
+                                    import json
+                                    user_categories = json.loads(user_categories)
+                                except:
+                                    user_categories = {}
+                            
+                            for category, amount in user_categories.items():
+                                if category in combined_results['category_breakdown']:
+                                    combined_results['category_breakdown'][category] += float(amount)
+                                else:
+                                    combined_results['category_breakdown'][category] = float(amount)
+                    
+                    # 构造合并结果（直接使用字典，避免动态对象访问问题）
+                    result = combined_results
+                
+                if result:
+                    # 确保category_breakdown是JSON对象而不是字符串
+                    category_breakdown = result['category_breakdown'] or {}
+                    if isinstance(category_breakdown, str):
+                        try:
+                            import json
+                            category_breakdown = json.loads(category_breakdown)
+                        except:
+                            category_breakdown = {}
+                    
+                    return {
+                        "success": True,
+                        "total_amount": float(result['total_amount']) if result['total_amount'] else 0,
+                        "category_breakdown": category_breakdown,
+                        "record_count": result['record_count'] or 0,
+                        "date_range": {
+                            "from": date_from,
+                            "to": date_to
+                        }
+                    }
+                else:
+                    return {
+                        "success": True,
+                        "total_amount": 0,
+                        "category_breakdown": {},
+                        "record_count": 0,
+                        "date_range": {
+                            "from": date_from,
+                            "to": date_to
+                        }
+                    }
+                    
+        except Exception as e:
+            # 如果数据库函数不存在，回退到传统查询
+            return await self._get_expense_summary_fallback(user_id, date_from, date_to, str(e))
+    
+    async def _get_expense_summary_fallback(self, user_id: str, date_from: Optional[str], date_to: Optional[str], error: str) -> Dict[str, Any]:
+        """
+        财务统计回退方案，使用优化的传统查询
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                uid = self._normalize_user_id(user_id)
+                
+                # 构建优化的查询，使用计算列索引
+                sql = """
+                SELECT 
+                    COALESCE(SUM(amount), 0) as total_amount,
+                    COUNT(*) as record_count,
+                    jsonb_object_agg(
+                        COALESCE(category_extracted, '未分类'),
+                        category_sum
+                    ) FILTER (WHERE category_sum > 0) as category_breakdown
+                FROM (
+                    SELECT 
+                        category_extracted,
+                        SUM(amount) as category_sum
+                    FROM memories 
+                    WHERE user_id = $1 
+                      AND type_extracted = 'expense'
+                      AND amount IS NOT NULL
+                """
+                
+                params = [uid]
+                
+                if date_from:
+                    sql += f" AND occurred_at >= ${len(params) + 1}"
+                    params.append(datetime.fromisoformat(date_from))
+                if date_to:
+                    sql += f" AND occurred_at <= ${len(params) + 1}"
+                    params.append(datetime.fromisoformat(date_to))
+                
+                sql += " GROUP BY category_extracted) cat_summary"
+                
+                result = await conn.fetchrow(sql, *params)
+                
+                return {
+                    "success": True,
+                    "total_amount": float(result['total_amount']) if result['total_amount'] else 0,
+                    "category_breakdown": result['category_breakdown'] or {},
+                    "record_count": result['record_count'] or 0,
+                    "date_range": {
+                        "from": date_from,
+                        "to": date_to
+                    },
+                    "fallback_used": True,
+                    "original_error": error
+                }
+                
+        except Exception as e:
+                            return {
+                    "success": False,
+                    "error": str(e),
+                    "fallback_error": True
+                }
+
+    async def _get_health_summary_optimized(self, user_id: str, person: Optional[str] = None, metric: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None) -> Dict[str, Any]:
+        """
+        健康数据统计优化函数
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                uid = self._normalize_user_id(user_id)
+                await self._ensure_user(conn, uid)
+                
+                # 准备时间参数
+                date_from_param = None
+                date_to_param = None
+                if date_from:
+                    date_from_param = datetime.fromisoformat(date_from)
+                if date_to:
+                    date_to_param = datetime.fromisoformat(date_to)
+                
+                # 尝试调用数据库函数
+                try:
+                    result = await conn.fetch(
+                        "SELECT * FROM get_health_summary($1, $2, $3, $4, $5)",
+                        uid, person, metric, date_from_param, date_to_param
+                    )
+                    
+                    health_data = []
+                    for row in result:
+                        health_data.append({
+                            "person": row['person'],
+                            "metric": row['metric'], 
+                            "latest_value": float(row['latest_value']) if row['latest_value'] else None,
+                            "latest_date": row['latest_date'].isoformat() if row['latest_date'] else None,
+                            "trend_data": row['trend_data'],
+                            "record_count": row['record_count']
+                        })
+                    
+                    return {
+                        "success": True,
+                        "health_summary": health_data,
+                        "filters": {
+                            "person": person,
+                            "metric": metric,
+                            "date_from": date_from,
+                            "date_to": date_to
+                        }
+                    }
+                
+                except Exception as e:
+                    # 回退到传统查询
+                    return await self._get_health_summary_fallback(user_id, person, metric, date_from, date_to, str(e))
+                    
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _get_health_summary_fallback(self, user_id: str, person: Optional[str], metric: Optional[str], date_from: Optional[str], date_to: Optional[str], error: str) -> Dict[str, Any]:
+        """
+        健康数据统计回退方案
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                uid = self._normalize_user_id(user_id)
+                
+                # 构建优化查询
+                sql = """
+                SELECT 
+                    person_extracted as person,
+                    metric_extracted as metric,
+                    value_extracted as value,
+                    occurred_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY person_extracted, metric_extracted 
+                        ORDER BY occurred_at DESC
+                    ) as rn
+                FROM memories 
+                WHERE user_id = $1 
+                  AND type_extracted = 'health'
+                  AND value_extracted IS NOT NULL
+                """
+                
+                params = [uid]
+                
+                if person:
+                    sql += f" AND person_extracted = ${len(params) + 1}"
+                    params.append(person)
+                if metric:
+                    sql += f" AND metric_extracted = ${len(params) + 1}"
+                    params.append(metric)
+                if date_from:
+                    sql += f" AND occurred_at >= ${len(params) + 1}"
+                    params.append(datetime.fromisoformat(date_from))
+                if date_to:
+                    sql += f" AND occurred_at <= ${len(params) + 1}"
+                    params.append(datetime.fromisoformat(date_to))
+                
+                sql += " ORDER BY person_extracted, metric_extracted, occurred_at DESC"
+                
+                rows = await conn.fetch(sql, *params)
+                
+                # 处理结果
+                health_data = {}
+                for row in rows:
+                    key = f"{row['person']}_{row['metric']}"
+                    if key not in health_data:
+                        health_data[key] = {
+                            "person": row['person'],
+                            "metric": row['metric'],
+                            "latest_value": None,
+                            "latest_date": None,
+                            "trend_data": [],
+                            "record_count": 0
+                        }
+                    
+                    if row['rn'] == 1:  # 最新记录
+                        health_data[key]["latest_value"] = float(row['value'])
+                        health_data[key]["latest_date"] = row['occurred_at'].isoformat()
+                    
+                    if row['rn'] <= 10:  # 最近10条用于趋势
+                        health_data[key]["trend_data"].append({
+                            "date": row['occurred_at'].isoformat(),
+                            "value": float(row['value'])
+                        })
+                    
+                    health_data[key]["record_count"] += 1
+                
+                return {
+                    "success": True,
+                    "health_summary": list(health_data.values()),
+                    "filters": {
+                        "person": person,
+                        "metric": metric,
+                        "date_from": date_from,
+                        "date_to": date_to
+                    },
+                    "fallback_used": True,
+                    "original_error": error
+                }
+                
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "fallback_error": True
+            }
+
+    async def _get_learning_progress_optimized(self, user_id: str, person: Optional[str] = None, subject: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None) -> Dict[str, Any]:
+        """
+        学习进展统计优化函数
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                uid = self._normalize_user_id(user_id)
+                await self._ensure_user(conn, uid)
+                
+                # 准备时间参数
+                date_from_param = None
+                date_to_param = None
+                if date_from:
+                    date_from_param = datetime.fromisoformat(date_from)
+                if date_to:
+                    date_to_param = datetime.fromisoformat(date_to)
+                
+                # 尝试调用数据库函数
+                try:
+                    result = await conn.fetch(
+                        "SELECT * FROM get_learning_progress($1, $2, $3, $4, $5)",
+                        uid, person, subject, date_from_param, date_to_param
+                    )
+                    
+                    learning_data = []
+                    for row in result:
+                        learning_data.append({
+                            "person": row['person'],
+                            "subject": row['subject'],
+                            "avg_score": float(row['avg_score']) if row['avg_score'] else None,
+                            "latest_score": float(row['latest_score']) if row['latest_score'] else None,
+                            "improvement": float(row['improvement']) if row['improvement'] else None,
+                            "record_count": row['record_count'],
+                            "score_distribution": row['score_distribution']
+                        })
+                    
+                    return {
+                        "success": True,
+                        "learning_progress": learning_data,
+                        "filters": {
+                            "person": person,
+                            "subject": subject,
+                            "date_from": date_from,
+                            "date_to": date_to
+                        }
+                    }
+                
+                except Exception as e:
+                    # 回退到传统查询
+                    return await self._get_learning_progress_fallback(user_id, person, subject, date_from, date_to, str(e))
+                    
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _get_learning_progress_fallback(self, user_id: str, person: Optional[str], subject: Optional[str], date_from: Optional[str], date_to: Optional[str], error: str) -> Dict[str, Any]:
+        """
+        学习进展统计回退方案
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                uid = self._normalize_user_id(user_id)
+                
+                # 构建优化查询
+                sql = """
+                SELECT 
+                    person_extracted as person,
+                    subject_extracted as subject,
+                    value_extracted as score,
+                    occurred_at
+                FROM memories 
+                WHERE user_id = $1 
+                  AND type_extracted IN ('learning', 'exam', 'homework')
+                  AND value_extracted IS NOT NULL
+                """
+                
+                params = [uid]
+                
+                if person:
+                    sql += f" AND person_extracted = ${len(params) + 1}"
+                    params.append(person)
+                if subject:
+                    sql += f" AND subject_extracted = ${len(params) + 1}"
+                    params.append(subject)
+                if date_from:
+                    sql += f" AND occurred_at >= ${len(params) + 1}"
+                    params.append(datetime.fromisoformat(date_from))
+                if date_to:
+                    sql += f" AND occurred_at <= ${len(params) + 1}"
+                    params.append(datetime.fromisoformat(date_to))
+                
+                sql += " ORDER BY person_extracted, subject_extracted, occurred_at DESC"
+                
+                rows = await conn.fetch(sql, *params)
+                
+                # 处理结果
+                learning_data = {}
+                for row in rows:
+                    key = f"{row['person']}_{row['subject']}"
+                    if key not in learning_data:
+                        learning_data[key] = {
+                            "person": row['person'],
+                            "subject": row['subject'],
+                            "scores": [],
+                            "record_count": 0
+                        }
+                    
+                    learning_data[key]["scores"].append(float(row['score']))
+                    learning_data[key]["record_count"] += 1
+                
+                # 计算统计信息
+                for data in learning_data.values():
+                    scores = data["scores"]
+                    if scores:
+                        data["avg_score"] = round(sum(scores) / len(scores), 2)
+                        data["latest_score"] = scores[0] if scores else None
+                        data["improvement"] = scores[0] - scores[-1] if len(scores) > 1 else None
+                        data["score_distribution"] = {
+                            "excellent": len([s for s in scores if s >= 90]),
+                            "good": len([s for s in scores if 80 <= s < 90]),
+                            "average": len([s for s in scores if 70 <= s < 80]),
+                            "needs_improvement": len([s for s in scores if s < 70])
+                        }
+                    del data["scores"]  # 移除临时字段
+                
+                return {
+                    "success": True,
+                    "learning_progress": list(learning_data.values()),
+                    "filters": {
+                        "person": person,
+                        "subject": subject,
+                        "date_from": date_from,
+                        "date_to": date_to
+                    },
+                    "fallback_used": True,
+                    "original_error": error
+                }
+                
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "fallback_error": True
+            }
+
+    async def _get_data_type_summary_optimized(self, user_id: str, data_type: str, group_by_field: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None) -> Dict[str, Any]:
+        """
+        通用数据类型统计优化函数
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                uid = self._normalize_user_id(user_id)
+                await self._ensure_user(conn, uid)
+                
+                # 准备时间参数
+                date_from_param = None
+                date_to_param = None
+                if date_from:
+                    date_from_param = datetime.fromisoformat(date_from)
+                if date_to:
+                    date_to_param = datetime.fromisoformat(date_to)
+                
+                # 尝试调用数据库函数
+                try:
+                    result = await conn.fetch(
+                        "SELECT * FROM get_data_type_summary($1, $2, $3, $4, $5)",
+                        uid, data_type, group_by_field, date_from_param, date_to_param
+                    )
+                    
+                    summary_data = []
+                    for row in result:
+                        summary_data.append({
+                            "data_type": row['data_type'],
+                            "group_value": row['group_value'],
+                            "record_count": row['record_count'],
+                            "numeric_summary": row['numeric_summary'],
+                            "latest_records": row['latest_records']
+                        })
+                    
+                    return {
+                        "success": True,
+                        "data_summary": summary_data,
+                        "filters": {
+                            "data_type": data_type,
+                            "group_by_field": group_by_field,
+                            "date_from": date_from,
+                            "date_to": date_to
+                        }
+                    }
+                
+                except Exception as e:
+                    # 回退到传统查询
+                    return await self._get_data_type_summary_fallback(user_id, data_type, group_by_field, date_from, date_to, str(e))
+                    
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _get_data_type_summary_fallback(self, user_id: str, data_type: str, group_by_field: Optional[str], date_from: Optional[str], date_to: Optional[str], error: str) -> Dict[str, Any]:
+        """
+        通用数据类型统计回退方案
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                uid = self._normalize_user_id(user_id)
+                
+                # 构建基础查询
+                sql = f"""
+                SELECT 
+                    type_extracted as data_type,
+                    {f"{group_by_field}_extracted as group_value," if group_by_field else "'total' as group_value,"}
+                    COUNT(*) as record_count,
+                    AVG(value_extracted) as avg_value,
+                    MIN(value_extracted) as min_value,
+                    MAX(value_extracted) as max_value,
+                    SUM(value_extracted) as sum_value
+                FROM memories 
+                WHERE user_id = $1 
+                  AND type_extracted = $2
+                """
+                
+                params = [uid, data_type]
+                
+                if date_from:
+                    sql += f" AND occurred_at >= ${len(params) + 1}"
+                    params.append(datetime.fromisoformat(date_from))
+                if date_to:
+                    sql += f" AND occurred_at <= ${len(params) + 1}"
+                    params.append(datetime.fromisoformat(date_to))
+                
+                if group_by_field:
+                    sql += f" GROUP BY type_extracted, {group_by_field}_extracted"
+                else:
+                    sql += " GROUP BY type_extracted"
+                
+                sql += " ORDER BY record_count DESC"
+                
+                rows = await conn.fetch(sql, *params)
+                
+                summary_data = []
+                for row in rows:
+                    numeric_summary = None
+                    if row['avg_value'] is not None:
+                        numeric_summary = {
+                            "avg": round(float(row['avg_value']), 2) if row['avg_value'] else None,
+                            "min": float(row['min_value']) if row['min_value'] else None,
+                            "max": float(row['max_value']) if row['max_value'] else None,
+                            "sum": float(row['sum_value']) if row['sum_value'] else None
+                        }
+                    
+                    summary_data.append({
+                        "data_type": row['data_type'],
+                        "group_value": row['group_value'],
+                        "record_count": row['record_count'],
+                        "numeric_summary": numeric_summary,
+                        "latest_records": []  # 简化版本不包含最新记录
+                    })
+                
+                return {
+                    "success": True,
+                    "data_summary": summary_data,
+                    "filters": {
+                        "data_type": data_type,
+                        "group_by_field": group_by_field,
+                        "date_from": date_from,
+                        "date_to": date_to
+                    },
+                    "fallback_used": True,
+                    "original_error": error
+                }
+                
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "fallback_error": True
+            }
     
     def _setup_tools(self):
         """注册所有通用工具"""
@@ -706,14 +1418,63 @@ class GenericMCPServer:
         
         @self.server.tool()
         async def store(content: str, ai_data: Dict[str, Any], user_id: str, embedding: Optional[Any] = None) -> Dict[str, Any]:
+            """
+            存储任何 AI 认为需要记住的信息
+            
+            财务数据存储时，ai_data 建议包含：
+            - type: "expense"(支出) | "income"(收入) | "budget"(预算)
+            - amount: 金额数值（必须）
+            - category: 分类（如 "餐饮", "交通", "医疗"）
+            - occurred_at: 发生时间（ISO格式）
+            - person: 相关人员（可选）
+            - description: 详细描述
+            
+            Args:
+                content: 原始内容文本
+                ai_data: AI理解的结构化信息
+                user_id: 用户ID
+                embedding: 向量表示（可选）
+            """
             return await self._store(content, ai_data, user_id, embedding)
         
         @self.server.tool()
         async def search(query: str, user_id: str, filters: Optional[Dict[str, Any]] = None, query_embedding: Optional[Any] = None) -> List[Dict[str, Any]]:
+            """
+            搜索相关记忆，支持语义和精确查询
+            
+            财务查询时建议使用精确过滤：
+            - 按类型过滤: filters={"jsonb_equals": {"type": "expense"}}
+            - 按时间过滤: filters={"date_from": "2025-08-01", "date_to": "2025-08-31"}
+            - 按分类过滤: filters={"jsonb_equals": {"category": "餐饮"}}
+            
+            Args:
+                query: 搜索查询词（可为空，用于结构化过滤）
+                user_id: 用户ID
+                filters: 过滤条件，支持各种精确匹配
+                query_embedding: 查询向量（可选，用于语义搜索）
+            """
             return await self._search(query, user_id, filters, query_embedding)
         
         @self.server.tool()
         async def aggregate(user_id: str, operation: str, field: Optional[str], filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+            """
+            对数据进行聚合统计
+            
+            重要：财务统计时需要区分数据类型，避免混淆预算和支出：
+            - 支出统计: filters={"jsonb_equals": {"type": "expense"}}
+            - 收入统计: filters={"jsonb_equals": {"type": "income"}} 
+            - 预算查询: filters={"jsonb_equals": {"type": "budget"}}
+            - 分类统计: filters={"group_by_ai_field": "category"}
+            
+            Args:
+                user_id: 用户ID
+                operation: sum|count|avg|min|max
+                field: 要聚合的字段名（如 "amount"）
+                filters: 过滤条件，支持 jsonb_equals/date_from/date_to/group_by_ai_field
+                
+            Returns:
+                聚合结果，如有分组则返回 groups 数组
+            """
             return await self._aggregate(user_id, operation, field, filters)
         
         @self.server.tool()
@@ -751,6 +1512,73 @@ class GenericMCPServer:
         @self.server.tool()
         async def render_chart(type: str, title: str, x: List[Any], series: List[Dict[str, Any]], style: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             return await self._render_chart(type, title, x, series, style)
+        
+        @self.server.tool()
+        async def get_expense_summary_optimized(user_id: Union[str, List[str]], date_from: Optional[str] = None, date_to: Optional[str] = None) -> Dict[str, Any]:
+            """
+            高效的财务统计函数，支持家庭统计（多用户）和单用户统计
+            
+            Args:
+                user_id: 用户ID（字符串）或用户ID列表（家庭统计）
+                date_from: 开始日期（ISO格式，可选）
+                date_to: 结束日期（ISO格式，可选）
+            
+            Returns:
+                包含总金额、分类明细、记录数的统计结果
+                家庭统计时自动合并所有家庭成员的数据
+            """
+            return await self._get_expense_summary_optimized(user_id, date_from, date_to)
+
+        @self.server.tool()
+        async def get_health_summary_optimized(user_id: str, person: Optional[str] = None, metric: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None) -> Dict[str, Any]:
+            """
+            高效的健康数据统计函数，支持趋势分析和最新状态查询
+            
+            Args:
+                user_id: 用户ID
+                person: 家庭成员（可选，如"儿子"、"大女儿"）
+                metric: 健康指标（可选，如"身高"、"体重"）
+                date_from: 开始日期（ISO格式，可选）
+                date_to: 结束日期（ISO格式，可选）
+            
+            Returns:
+                包含各成员各指标的最新值、趋势数据、记录数的统计结果
+            """
+            return await self._get_health_summary_optimized(user_id, person, metric, date_from, date_to)
+
+        @self.server.tool()
+        async def get_learning_progress_optimized(user_id: str, person: Optional[str] = None, subject: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None) -> Dict[str, Any]:
+            """
+            高效的学习进展统计函数，支持成绩分析和进步追踪
+            
+            Args:
+                user_id: 用户ID
+                person: 家庭成员（可选，如"儿子"、"大女儿"）
+                subject: 学习科目（可选，如"数学"、"语文"）
+                date_from: 开始日期（ISO格式，可选）
+                date_to: 结束日期（ISO格式，可选）
+            
+            Returns:
+                包含各成员各科目的平均分、最新分、进步情况、分数分布的统计结果
+            """
+            return await self._get_learning_progress_optimized(user_id, person, subject, date_from, date_to)
+
+        @self.server.tool()  
+        async def get_data_type_summary_optimized(user_id: str, data_type: str, group_by_field: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None) -> Dict[str, Any]:
+            """
+            通用数据类型统计函数，支持任意类型的聚合分析
+            
+            Args:
+                user_id: 用户ID
+                data_type: 数据类型（如"health"、"learning"、"expense"等）
+                group_by_field: 分组字段（可选，如"person"、"metric"、"category"）
+                date_from: 开始日期（ISO格式，可选）
+                date_to: 结束日期（ISO格式，可选）
+            
+            Returns:
+                包含按指定字段分组的统计结果，数值摘要，最新记录等
+            """
+            return await self._get_data_type_summary_optimized(user_id, data_type, group_by_field, date_from, date_to)
     
     async def run(self):
         """运行 MCP 服务器"""

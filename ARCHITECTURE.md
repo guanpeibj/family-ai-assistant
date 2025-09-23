@@ -16,10 +16,10 @@
 │         │                  │            │
 │         ▼                  ▼            │
 │     ┌────────────────────────────┐     │
-│     │      AI Engine (增强版)     │     │
-│     │  • Prompt Manager          │     │
-│     │  • Context Awareness       │     │
-│     │  • Emotion Support         │     │
+│     │    AI Engine (统一驱动版)   │     │
+│     │  • 统一理解（含上下文）       │     │
+│     │  • AI自主对话关系处理       │     │
+│     │  • 智能深度上下文搜索       │     │
 │     └────────────┬───────────────┘     │
 └──────────────────┼─────────────────────┘
                    │
@@ -47,22 +47,30 @@
 
 ## 核心组件
 
-### 1. AI Engine (增强版)
-- **Prompt Manager**: 动态加载和管理不同版本的提示词
-- **历史上下文感知**: 获取最近5条交互记录辅助理解
-- **情感支持系统**: 识别用户情绪并给予温暖回应
-- **智能分类器**: 自动识别育儿、教育、医疗等特殊类别
+### 1. AI Engine (统一驱动版)
+- **统一理解入口**: 单一AI理解流程，自动处理所有对话复杂度
+- **智能上下文感知**: 基础上下文（最近对话）+ 可选深度搜索（语义相关）
+- **AI自主对话关系识别**: 自动识别跟进、新话题、修正等对话关系
+- **零工程预设**: 完全由AI决定信息合并、完整性判断、澄清策略
 
 ### 2. Prompt 管理系统
 ```yaml
 # prompts/family_assistant_prompts.yaml
-version: "2.0"
-current: "v2_enhanced"
+version: "4.0"
+current: "v4_default"
+blocks:
+  system_identity: |
+    ...
 prompts:
-  v2_enhanced:
-    system: 详细的家庭场景指导
-    understanding: 消息理解增强规则
-    response_generation: 回复生成优化策略
+  v4_default:
+    system_blocks: [system_identity, ...]
+    understanding_blocks: [understanding_contract]
+    response_blocks: [response_contract]
+    response_ack_blocks: [ack_prompt]
+    tool_planning_blocks: [planning_brief]
+    profiles:
+      threema:
+        response_blocks: [response_contract, response_voice_compact]
 ```
 
 ### 3. MCP 工具层（完全通用）
@@ -80,67 +88,93 @@ CREATE TABLE memories (
     user_id UUID NOT NULL,
     content TEXT NOT NULL,
     ai_understanding JSONB,  -- AI自由决定存什么
-    embedding vector(1536),  -- 语义向量（由 AI Engine 生成并传入）
+    embedding vector(512),   -- 语义向量（BAAI/bge-small-zh-v1.5，由 AI Engine 生成并传入）
     amount DECIMAL,          -- 精确金额(可选)
     occurred_at TIMESTAMP    -- 精确时间(可选)
 );
 ```
 
-## AI 驱动的核心流程
+## AI 驱动的统一流程 (重构后)
 
-### 1. 消息理解流程
-```python
-async def understand_message(content, user_id):
-    # 1. 获取历史上下文
-    recent_memories = get_recent_memories(user_id, limit=5)
-    
-    # 2. 加载当前prompt版本
-    system_prompt = prompt_manager.get_system_prompt()
-    understanding_guide = prompt_manager.get_understanding_prompt()
-    
-    # 3. AI理解（包含上下文）
-    understanding = await ai.analyze(
-        content, 
-        context=recent_memories,
-        guide=understanding_guide
-    )
-    
-    return understanding
+### 核心理念: 让AI决定一切
+```
+用户输入 → 统一AI理解（含上下文） → 工具计划 → 执行 → 回复
 ```
 
-### 2. 智能回复生成
+### 1. 统一AI理解流程
 ```python
-async def generate_response(understanding, results):
-    # 使用增强的回复指导
-    response_guide = prompt_manager.get_response_prompt()
-    
-    # 生成温暖、有用的回复
-    response = await ai.generate(
-        understanding=understanding,
-        results=results,
-        guide=response_guide,
-        style="warm_and_helpful"
+async def process_message(content, user_id, context):
+    light_context = await get_recent_memories(user_id, thread=context.thread_id)
+
+    analysis = await analyze_message(
+        message=content,
+        user_id=user_id,
+        context=context,
+        light_context=light_context,
     )
-    
-    return response
+
+    if analysis.understanding.need_clarification:
+        return await generate_clarification(analysis.understanding)
+
+    context_payload = await resolve_context_requests(analysis.context_requests)
+    plan = await build_tool_plan(
+        understanding=analysis.understanding,
+        context_payload=context_payload,
+        analysis_plan=analysis.tool_plan,
+    )
+    execution_result = await execute_tool_steps(plan.steps, context_payload)
+    return await generate_response(
+        understanding=analysis.understanding,
+        execution_result=execution_result,
+        context_payload=context_payload,
+        response_directives=analysis.response_directives,
+    )
 ```
 
-## 自我进化机制
+分析返回的结构是固定契约：
+- `understanding`：AI对本轮消息的结构化理解（意图、实体、澄清状态等）
+- `context_requests`：LLM声明需要的额外上下文（recent_memories / semantic_search / direct_search ...）
+- `tool_plan`：草稿步骤与所需上下文引用
+- `response_directives`：回复所需的 profile、语气与关注点
 
-### 1. Prompt 版本迭代
-- 通过YAML配置文件管理prompt版本
-- 支持A/B测试不同的prompt策略
-- 无需修改代码即可优化AI行为
+### 2. 智能上下文管理
+- `context_requests` 描述需要的资源类型（例如近期对话、语义检索结果、线程摘要、指定过滤搜索等）
+- 引擎统一通过 `_resolve_context_requests` 调用 MCP `search / batch_search` 等工具拉取数据，结果写入 `context_payload`
+- 工具计划可通过 `{"use_context": "recent_history"}` 等引用上下文数据，执行阶段会自动解析
 
-### 2. 数据积累增强
-- 每次交互都在丰富AI的理解
-- 历史数据帮助更准确的个性化
-- JSONB字段支持存储任意新信息
+## 自我进化机制 - 核心设计理念
 
-### 3. 模型升级透明
-- 更换OpenAI模型只需修改配置
-- 自动获得新模型的能力提升
-- 工程代码保持稳定
+> **"工程固定，能力自动增长"** - 即使工程代码保持不变，系统的智能和能力也随着AI模型进步和数据积累而自动提升
+
+### 1. AI模型升级 → 能力自动提升
+```bash
+# 仅需更新配置，无需修改代码
+OPENAI_MODEL=gpt-4o  # 未来可能是 gpt-5, claude-4 等
+```
+**自动获得的新能力**：
+- 更准确的对话关系识别
+- 更智能的上下文理解
+- 更自然的多轮对话处理
+- 更复杂的推理能力
+
+### 2. Prompt优化 → 行为自动改进
+```yaml
+# 只需调整YAML，行为立即优化
+contextual_understanding_rules: |
+  AI自主上下文理解：
+  - 自动识别跟进回答："给二女儿的"→补充前一个记账请求
+  - 自动合并信息：跟进+原始请求→完整理解
+```
+
+### 3. 数据积累 → 个性化自动增强
+- 历史对话提供更好的上下文
+- AI自学习家庭成员偏好
+- JSONB开放结构支持AI发现新信息类型
+
+### 4. 零工程干预的能力扩展
+- **新对话模式**：AI自动适应，无需编程
+- **复杂场景处理**：更强模型自动胜任
+- **个性化改进**：随使用自动优化
 
 ## 部署架构
 

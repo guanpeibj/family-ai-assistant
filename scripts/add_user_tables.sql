@@ -33,6 +33,49 @@ CREATE TABLE IF NOT EXISTS user_channels (
 CREATE INDEX idx_user_channels_user_id ON user_channels(user_id);
 CREATE INDEX idx_user_channels_channel ON user_channels(channel);
 
+-- 家庭户表
+CREATE TABLE IF NOT EXISTS family_households (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    slug VARCHAR(128) NOT NULL UNIQUE,
+    display_name VARCHAR(255) NOT NULL,
+    description TEXT,
+    config JSONB DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS ix_family_households_slug ON family_households (slug);
+
+-- 家庭成员表
+CREATE TABLE IF NOT EXISTS family_members (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    household_id UUID NOT NULL REFERENCES family_households(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    member_key VARCHAR(128) NOT NULL,
+    display_name VARCHAR(255) NOT NULL,
+    relationship VARCHAR(64),
+    profile JSONB DEFAULT '{}'::jsonb,
+    is_active BOOLEAN DEFAULT TRUE,
+    CONSTRAINT uq_family_member_household_key UNIQUE (household_id, member_key)
+);
+
+CREATE INDEX IF NOT EXISTS ix_family_members_household_id ON family_members(household_id);
+
+-- 家庭成员与账号映射表
+CREATE TABLE IF NOT EXISTS family_member_accounts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    member_id UUID NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    is_primary BOOLEAN DEFAULT FALSE,
+    labels JSONB DEFAULT '{}'::jsonb,
+    CONSTRAINT uq_family_member_user UNIQUE (member_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_family_member_accounts_member_id ON family_member_accounts(member_id);
+CREATE INDEX IF NOT EXISTS ix_family_member_accounts_user_id ON family_member_accounts(user_id);
+
 -- 修改 memories 表（如果需要）
 DO $$
 BEGIN

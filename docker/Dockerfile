@@ -24,6 +24,15 @@ RUN uv venv .venv && \
     . .venv/bin/activate && \
     uv pip install -i https://pypi.tuna.tsinghua.edu.cn/simple/ -e .
 
+# 设置 FastEmbed 模型缓存目录
+ENV FASTEMBED_CACHE_PATH="/data/fastembed_cache"
+RUN mkdir -p /data/fastembed_cache
+
+# 预下载 FastEmbed 模型，避免运行时下载失败
+RUN . .venv/bin/activate && \
+    python scripts/preload_fastembed.py || \
+    echo "Model pre-download failed, will retry at runtime"
+
 # 设置 PATH 以使用虚拟环境
 ENV PATH="/app/.venv/bin:$PATH"
 

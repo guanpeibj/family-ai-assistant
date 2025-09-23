@@ -11,15 +11,12 @@ import asyncio
 import structlog
 
 from src.services.threema_service import threema_service
-from src.ai_engine import AIEngine
+from src.services.engine_provider import ai_engine
 from src.db.database import get_db
 from src.db.models import UserChannel
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/webhook", tags=["webhooks"])
-
-# AI Engine 实例
-ai_engine = AIEngine()
 
 
 @router.post("/threema")
@@ -62,7 +59,6 @@ async def receive_threema_message(
         try:
             if attachments:
                 from src.core.config import settings
-                from src.services.media_service import derive_for_attachments
                 media_root = settings.MEDIA_ROOT
                 now = datetime.now()
                 base_dir = os.path.join(media_root, now.strftime("%Y"), now.strftime("%m"))
@@ -82,30 +78,6 @@ async def receive_threema_message(
                         'size': len(data),
                         'original_name': up.filename,
                     })
-                # 附件衍生改为：快速占位+后台回填
-                async def _derive_and_update():
-                    try:
-                        derived = await derive_for_attachments(saved_attachments)
-                        # 将衍生后的附件写入一条“附件衍生结果”记忆，供后续检索（不打断主流程）
-                        engine = ai_engine  # 复用全局实例
-                        text = "; ".join([
-                            (a.get('transcription', {}) or {}).get('text') or a.get('ocr_text') or a.get('vision_summary') or ''
-                            for a in derived
-                        ])
-                        try:
-                            embs = await engine.llm.embed([text]) if text else None
-                        except Exception:
-                            embs = None
-                        ai_data = {
-                            'type': 'attachment_derivation',
-                            'thread_id': decrypted.get('sender_id') or from_,
-                            'attachments': derived,
-                            'occurred_at': datetime.now().isoformat(),
-                        }
-                        await engine._call_mcp_tool('store', content=text or '(附件衍生完成)', ai_data=ai_data, user_id=user_id, embedding=(embs[0] if embs else None))
-                    except Exception as e:
-                        logger.error(f"attachments.derive.failed: {e}")
-                asyncio.create_task(_derive_and_update())
         except Exception as e:
             logger.error(f"attachments.save.failed: {e}")
         
@@ -156,7 +128,48 @@ async def receive_threema_message(
             user_id=user_id,
             context=context  # 把所有信息都给 AI
         )
-        
+
+        if saved_attachments:
+            from src.services.media_service import derive_for_attachments
+
+            async def _derive_and_update(target_user_id: str, thread_id: str, attachments_payload: List[Dict[str, Any]]):
+                try:
+                    derived = await derive_for_attachments(attachments_payload)
+                    text = "; ".join([
+                        (a.get('transcription', {}) or {}).get('text')
+                        or a.get('ocr_text')
+                        or a.get('vision_summary')
+                        or ''
+                        for a in derived
+                    ])
+                    try:
+                        embs = await ai_engine.llm.embed([text]) if text else None
+                    except Exception:
+                        embs = None
+                    ai_data = {
+                        'type': 'attachment_derivation',
+                        'thread_id': thread_id,
+                        'attachments': derived,
+                        'occurred_at': datetime.now().isoformat(),
+                    }
+                    await ai_engine._call_mcp_tool(
+                        'store',
+                        content=text or '(附件衍生完成)',
+                        ai_data=ai_data,
+                        user_id=target_user_id,
+                        embedding=(embs[0] if embs else None),
+                    )
+                except Exception as e:
+                    logger.error(f"attachments.derive.failed: {e}")
+
+            asyncio.create_task(
+                _derive_and_update(
+                    user_id,
+                    context.get('thread_id'),
+                    saved_attachments,
+                )
+            )
+
         # 4. 发送回复
         send_result = await threema_service.send_message(from_, response)
         

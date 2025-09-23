@@ -39,7 +39,10 @@ FFA应该支持 记忆和查询 家庭成员基本信息、家庭全年 日程�
 是否需要这两者结合？主要是使用扁平的元数据格式，但对于特别精确地一些结果，比如一部分健康信息或家庭账目信息等，再使用关系数据库的表格式存一份？
 或许需要一份初始化信息，我可以提供一份家庭成员详细情况，作为初始化时的信息？
 总之，信息库的设计是最重点的一部分，需要你给出详细可靠的建议。
+现在数据库里已经引入 `family_households / family_members / family_member_accounts` 三张极简结构表，用来描述一户家庭下的全部成员。成年人可以通过 `users`+`user_channels` 关联到成员节点，孩子或没有账号的成员则只需要维护 `family_members` 行即可。AI 仍然主导记忆结构，但在需要聚合/筛选时可以利用这些表给出的 `user_id` 列表来覆盖整个家庭或特定成员。
+1. Prompt 编排全部集中在 `prompts/family_assistant_prompts.yaml`，通过 `blocks + profiles` 组合出不同版本。LLM 输出契约定义在 `understanding_contract / planning_brief` 等 block 中，后续扩展只需改 YAML 而无需改代码。
 2. FAA应该包括一个可以接LLM api的组件，可能访问openai api / claude api / gemini api 等。由ai来决定这些重要问题：解析我和妻子的命令、是否存信息库以及如何存、是否查信息库以及如何查、已获得的信息如何给我们反馈。以上这些，尽量都交由ai决定，尽量少由代码和工程预定逻辑。
+   - 当前实现：`AIEngine.process_message` 只调一次 `_analyze_message`，LLM 输出固定契约 `{understanding, context_requests, tool_plan, response_directives}`，工程层仅负责按照契约补齐数据、执行计划、再把执行结果交回 LLM 生成回复。
 3. FFA 应该提供多种和 我们交互的方式，包括：Threema robbot 和 邮件，后续支持微信小程序、微信公众号、或是其他。FAA会作为我们的Threema的一个共同好友，和我、我妻子在一个群里，以对话形式沟通，也有一个专门的邮箱，我们也可以以邮件形式沟通。
 FAA 接收的内容格式支持文字、图片、语音等，FAA回复的格式目前支持文字/图片/表格等。
 4. FAA或许可以使用MCP技术，使用一个（或多个）MCP server，用docker-compose管理。或许考虑在信息库外层，封装一个MCP server，专门负责 管理 信息库？ 可以考虑。

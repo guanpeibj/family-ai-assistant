@@ -12,6 +12,12 @@
 2. **family_private_data_template.json** - 私有数据模板（可提交到GitHub）
 3. **family_private_data.json** - 你的真实家庭数据（绝不提交，已在.gitignore中）
 
+### 结构要点（新增）
+- `household`：声明家庭 slug、展示名称、时区等元信息。
+- `family_members[*].member_key`：每个成员的稳定标识，供数据库与 AI 内部引用。
+- `family_members[*].accounts`：可选账户绑定（如 Threema、Email），脚本会自动写入 `family_member_accounts` 与 `user_channels`。
+- 顶层 `threema_id` 仍然兼容，会自动赋给 `role="father"` 的成员。
+
 ### 使用步骤
 1. 复制 `family_private_data_template.json` 为 `family_private_data.json`
 2. 在 `family_private_data.json` 中填入你的真实家庭信息
@@ -22,9 +28,11 @@
 
 ### 1. init_family_data.py（数据层）
 - **作用**：初始化数据库中的持久化数据
-- **内容**：存储到memories表的实际家庭信息
-- **特点**：AI可以查询和使用这些数据
-- **使用时机**：系统部署时运行一次
+- **内容**：
+  - 向 `family_households / family_members / family_member_accounts` 写入结构化成员信息
+  - 将详细画像写入 `memories`，供语义检索
+- **特点**：AI 可以通过上下文获取成员档案（`profile`）、账号绑定与偏好信息
+- **使用时机**：系统部署时运行一次，或者家庭结构发生重大变化时重跑
 
 ### 2. family_assistant_prompts.yaml（行为层）
 - **作用**：定义AI的行为准则和人设
@@ -59,6 +67,8 @@
 ## 丰富的初始化数据清单
 
 ### 家庭成员详细信息
+- ✅ member_key（稳定 ID，避免因称呼变化导致数据错位）
+- ✅ names（formal / english / nickname / preferred）
 - ✅ 姓名/昵称
 - ✅ 出生日期/年龄
 - ✅ 身高、体重
@@ -67,12 +77,19 @@
 - ✅ 兴趣爱好
 - ✅ 学校/工作信息
 - ✅ 作息时间
+- ✅ life_status（alive / deceased），含去世日期与纪念习惯
 
 ### 家庭基础信息
 - ✅ 家庭住址
 - ✅ 车辆信息（含限行日期）
 - ✅ 宠物信息
 - ✅ 月度预算分配
+- ✅ 家庭季节性策略（`seasonal_playbook`）
+
+### 账号与渠道
+- ✅ Threema / Email / 微信等账号，可在 `accounts` 中声明
+- ✅ `labels` 字段可描述该账号用途（例如“家庭群主”）
+- ✅ `channel_data` 可附加额外元信息（如昵称、签名）
 
 ### 重要联系人
 - ✅ 老师联系方式
@@ -150,6 +167,9 @@ docker-compose run --rm faa-api python scripts/init_family_data.py
 4. **利用AI的学习能力**
    - 初始化提供基础框架
    - 日常使用中AI会不断积累新信息
+5. **维护 member_key 与账号映射**
+   - member_key 一旦确认尽量保持不变，避免丢失历史上下文
+   - 添加新账号时只需在 `accounts` 中追加，脚本会自动创建映射
 
 ## 示例：完整的家庭画像
 
@@ -162,3 +182,12 @@ docker-compose run --rm faa-api python scripts/init_family_data.py
 - "妈妈通常6点起床准备早餐，设置5:50的提醒"
 
 这样的个性化服务，正是通过详细的初始化数据实现的！ 
+
+## AI 如何消费这些数据
+
+- `context.household.households[*].config`：整体偏好、重要信息和联系人快速可用。
+- `context.household.members_index[member_key].profile`：完整的成员档案（过敏、作息、兴趣）。
+- `context.household.members_index[member_key].user_ids`：成员与账号的绑定，便于精准提醒或数据聚合。
+- 所有初始化写入的 `memories` 都带有 `family_scope=true`、`household_slug` 和 `member_key`，AI 可根据意图灵活检索。
+- `metadata`、`ai_playbook`、`seasonal_playbook`：为 AI 提供快速策略、语气和提醒触发条件，减少工程硬编码。
+- `profile.names` 与 `profile.life_status`：帮助 AI 选择恰当称呼、尊重去世成员并生成合适的情感回应。

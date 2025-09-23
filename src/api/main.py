@@ -13,13 +13,14 @@ import base64
 import os
 from ..core.logging import get_logger
 from ..db.database import init_db, close_db
-from ..ai_engine import AIEngine
+from ..services.engine_provider import (
+    ai_engine,
+    initialize_ai_engine,
+    shutdown_ai_engine,
+)
 from .threema_webhook import router as threema_router, send_to_threema_user
 
 logger = get_logger(__name__)
-
-# 全局AI引擎实例
-ai_engine = AIEngine()
 
 # 请求模型
 class MessageRequest(BaseModel):
@@ -53,7 +54,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     
     # 初始化AI引擎
-    await ai_engine.initialize_mcp()
+    await initialize_ai_engine()
     
     # 启动后台任务
     reminder_task_handle = asyncio.create_task(reminder_task())
@@ -71,7 +72,7 @@ async def lifespan(app: FastAPI):
         pass
     
     # 关闭AI引擎
-    await ai_engine.close()
+    await shutdown_ai_engine()
     
     # 关闭数据库
     await close_db()
@@ -153,7 +154,7 @@ async def handle_message(req: Request, response: Response, payload: MessageReque
         pass
 
     # 处理消息 - 通过 API 调用的消息没有特定渠道
-    response = await ai_engine.process_message(
+    ai_reply = await ai_engine.process_message(
         content=payload.content,
         user_id=payload.user_id,
         context={
@@ -167,7 +168,7 @@ async def handle_message(req: Request, response: Response, payload: MessageReque
     try:
         resp_obj = {
         "success": True,
-        "response": response,
+        "response": ai_reply,
         "message_id": request_id,
     }
         # 将 request_id 也放在响应头
@@ -187,7 +188,7 @@ async def handle_message(req: Request, response: Response, payload: MessageReque
         # 兜底返回
         return {
             "success": True,
-            "response": response,
+            "response": ai_reply,
             "message_id": request_id,
         }
 

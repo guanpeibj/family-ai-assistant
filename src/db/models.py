@@ -1,4 +1,16 @@
-from sqlalchemy import Column, String, DateTime, Text, Float, Index, Numeric, Boolean, ForeignKey, Enum, UniqueConstraint
+from sqlalchemy import (
+    Column,
+    String,
+    DateTime,
+    Text,
+    Float,
+    Index,
+    Numeric,
+    Boolean,
+    ForeignKey,
+    Enum,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
 from pgvector.sqlalchemy import Vector
@@ -41,6 +53,54 @@ class UserChannel(Base):
     )
 
 
+class FamilyHousehold(Base):
+    """家庭表 - 描述一户家庭的成员集合"""
+    __tablename__ = 'family_households'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    slug = Column(String(128), nullable=False, unique=True, index=True)  # 例如 "primary"
+    display_name = Column(String(255), nullable=False)
+    description = Column(Text)
+    config = Column(JSONB, default=dict)  # 额外配置：共享策略、默认时区等
+
+
+class FamilyMember(Base):
+    """家庭成员表 - 支持有无账号的成员"""
+    __tablename__ = 'family_members'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    household_id = Column(UUID(as_uuid=True), ForeignKey('family_households.id', ondelete='CASCADE'), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    member_key = Column(String(128), nullable=False)  # 机器可读的唯一键，例如 "mom"、"child_1"
+    display_name = Column(String(255), nullable=False)  # 对外展示名称
+    relationship = Column(String(64))  # 可选：妈妈/爸爸/孩子
+    profile = Column(JSONB, default=dict)  # 可选信息：生日、偏好等
+    is_active = Column(Boolean, default=True)
+
+    __table_args__ = (
+        UniqueConstraint('household_id', 'member_key', name='uq_family_member_household_key'),
+    )
+
+
+class FamilyMemberAccount(Base):
+    """家庭成员与用户账号的映射：支持多渠道/多账号"""
+    __tablename__ = 'family_member_accounts'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    member_id = Column(UUID(as_uuid=True), ForeignKey('family_members.id', ondelete='CASCADE'), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    is_primary = Column(Boolean, default=False)
+    labels = Column(JSONB, default=dict)  # 可选：渠道标签、别名
+
+    __table_args__ = (
+        UniqueConstraint('member_id', 'user_id', name='uq_family_member_user'),
+    )
+
+
 class Memory(Base):
     """通用记忆表 - AI驱动的数据存储"""
     __tablename__ = "memories"
@@ -52,7 +112,7 @@ class Memory(Base):
     # 核心数据
     content = Column(Text, nullable=False)  # 原始内容
     ai_understanding = Column(JSONB, nullable=False)  # AI理解的所有信息
-    embedding = Column(Vector(1536))  # 语义向量
+    embedding = Column(Vector(512))  # 语义向量 (BAAI/bge-small-zh-v1.5)
     
     # 精确查询支持（可选，AI决定是否填充）
     amount = Column(Numeric(10, 2), index=True)  # 金额（如果是财务相关）

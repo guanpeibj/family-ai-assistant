@@ -1,29 +1,58 @@
 ---
 globs: src/ai_engine.py
-description: AI 引擎（消息理解→计划→工具执行→回复→存储）的行为准则与扩展点
+description: AI引擎统一驱动流程 - 让AI自主处理所有对话理解和关系识别
 ---
-## 流程总览
-1) 轻理解 `_light_understand_message`：低成本判定意图/缺失信息，尽早澄清。
-2) 跟进合并 `_maybe_merge_followup`：基于最近 `chat_turn` 与分类器合并槽位（person/occurred_at/amount/...）。
-3) 条件重理解 `_understand_message`：当需要语义检索/统计/复杂理解时，批量 `batch_search` 组装上下文（最近对话、语义相关、线程摘要）。
-4) 计划 `_build_tool_plan`：基于 Prompt(含动态工具规格) 仅输出 `{steps:[{tool,args}]}`。
-5) 执行 `_execute_tool_steps`：动态工具白名单、自动注入 `user_id/thread_id/trace_id`、为 `store/search` 自动生成/复用向量，支持 `$LAST_STORE_ID`。
-6) 回复：简单操作走 `_build_simple_ack_response`；否则 `_generate_clarification_response` / `_generate_normal_response`（可选 `render_chart` + 签名链接）。
-7) 持久化：`_store_chat_turns`（批量存 user/assistant 回合）、`_persist_interaction`（全链路回溯）。
+## 重构后的统一流程
+**核心理念**: 工程简化、AI驱动、自动进化
 
-## 重要约束
-- 不在引擎中硬编码业务逻辑；一切依赖 Prompt 与 MCP 工具。
-- 工具时间预算来自 MCP `/tools` 的 `x_time_budget`，未命中用内置默认。
-- 严格模式(`MCP_STRICT_MODE=true`)下 MCP 不可用时不做模拟；理解/计划照常进行但工具结果为空或 error 对象。
-- 嵌入缓存：trace 级与全局 LRU，优先复用以降成本；所有向量生成集中在引擎侧。
-- 共享线程：当 `context.shared_thread=true` 或 `conversation_scope=shared` 时，允许跨用户按 `thread_id` 聚合检索（MCP 内部有上限保护）。
+```
+用户输入 → 统一AI理解（含上下文） → 工具计划 → 执行 → 回复
+```
 
-## 扩展建议
-- 新工具接入：先在 MCP 暴露，再在 Prompt `tool_specification` 描述并加入引擎白名单；避免在引擎写死参数。
-- 新回复风格：通过 YAML `response_*` 块扩展；引擎仅拼装 system/user 提示。
-- 统计/图表：用 `aggregate` + `render_chart`，分组字段走 `filters.group_by/group_by_ai_field`。
+### 主流程 `process_message`:
+1) **预处理**: 附件衍生文本合并
+2) **统一理解** `_understand_message`: AI自主处理所有对话复杂度
+   - 基础上下文（最近8轮对话，用于识别跟进关系）
+   - 智能深度搜索（仅复杂查询/统计时启用语义搜索）
+   - **AI完全自主**: 对话关系识别、信息合并、完整性判断
+3) **分支处理**: AI决定需要澄清 → 生成澄清回复并返回
+4) **工具执行**: `_build_tool_plan` → `_execute_tool_steps`
+5) **回复生成**: 简单确认 or 详细回复
+6) **持久化**: 对话回合存储 + 交互轨迹记录
 
-## 易错点
-- `store` 时合并 `entities`→`ai_data` 并尽量补全 `occurred_at/thread_id/trace_id/attachments`。
-- 工具返回列表末尾可能有 `_meta`，展示时需过滤。
-- Threema 渠道长度控制：过长自动截断至 <500 字。
+## AI自主能力（重构核心）
+**删除的复杂工程逻辑**:
+- ❌ `_light_understand_message` (轻理解)
+- ❌ `_maybe_merge_followup` (跟进检测)
+- ❌ `_classify_followup` (跟进分类)
+- ❌ `_reduce_thread_state` (线程状态归纳)
+
+**AI现在完全自主处理**:
+- ✅ 对话关系识别: "给二女儿的" → 识别为跟进回答
+- ✅ 信息合并: 自动合并跟进信息形成完整理解
+- ✅ 完整性判断: 自主决定是否需要澄清
+- ✅ 上下文感知: 智能利用历史对话理解当前意图
+
+## 性能优化策略
+- **智能上下文分层**: 
+  * 基础上下文（最近8轮）: 始终包含，用于对话关系识别
+  * 深度上下文（语义搜索）: 仅复杂查询时启用
+- **`_should_semantic_search`优化**: 简短跟进回答（≤20字）通常跳过语义搜索
+- **嵌入缓存**: trace级 + 全局LRU，成本优化
+
+## 核心约束（不变）
+- 不在引擎中硬编码业务逻辑；一切依赖 Prompt 与 MCP 工具
+- 工具时间预算来自 MCP `/tools` 的 `x_time_budget`
+- 严格模式下MCP不可用时不模拟，但理解/计划正常进行
+- 共享线程支持跨用户检索（有上限保护）
+
+## 扩展原则（AI驱动）
+- **新对话模式**: 通过优化Prompt实现，无需修改代码
+- **行为改进**: 调整YAML配置即可，工程代码保持稳定
+- **能力提升**: 更强的AI模型自动提升系统能力
+
+## 关键点
+- `understanding`输出必须包含`conversation_act`字段
+- `store`时自动合并`entities`→`ai_data`
+- 工具返回的`_meta`项需在展示时过滤
+- Threema渠道<500字长度控制保持不变

@@ -13,6 +13,9 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/01-init.sql
       - ./scripts/add_user_tables.sql:/docker-entrypoint-initdb.d/02-users.sql
+      - ./scripts/optimize_db.sql:/docker-entrypoint-initdb.d/03-optimize.sql
+      - ./docker/postgresql.conf:/etc/postgresql/postgresql.conf
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U faa -d family_assistant"]
       interval: 10s
@@ -33,6 +36,8 @@ services:
       - AI_PROVIDER=${AI_PROVIDER:-openai_compatible}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL}
+      - LOW_LLM_BUDGET=${LOW_LLM_BUDGET:-false}
+      - LLM_MAX_RETRIES=${LLM_MAX_RETRIES:-1}
       - THREEMA_GATEWAY_ID=${THREEMA_GATEWAY_ID}
       - THREEMA_SECRET=${THREEMA_SECRET}
       - THREEMA_PRIVATE_KEY=${THREEMA_PRIVATE_KEY}
@@ -42,6 +47,7 @@ services:
       - SECRET_KEY=${SECRET_KEY}
       - MCP_SERVER_URL=http://faa-mcp:8000
       - MEDIA_ROOT=/data/media
+      - FASTEMBED_CACHE_PATH=/data/fastembed_cache
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,7 +55,9 @@ services:
         condition: service_started
     volumes:
       - ./src:/app/src
+      - ./prompts:/app/prompts
       - media_data:/data/media
+      - fastembed_cache:/data/fastembed_cache
     command: sh -c "/app/.venv/bin/alembic upgrade head && /app/.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload"
 
   faa-mcp:
@@ -61,6 +69,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL}
       - MEDIA_ROOT=/data/media
+      - FASTEMBED_CACHE_PATH=/data/fastembed_cache
     depends_on:
       postgres:
         condition: service_healthy
@@ -69,8 +78,10 @@ services:
     volumes:
       - ./mcp-server:/app/mcp-server
       - media_data:/data/media
+      - fastembed_cache:/data/fastembed_cache
     command: python mcp-server/mcp_http_wrapper.py
 
 volumes:
   postgres_data:
   media_data:
+  fastembed_cache:

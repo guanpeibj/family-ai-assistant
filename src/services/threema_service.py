@@ -164,7 +164,8 @@ class ThreemaService:
 
     async def send_image_link(self, to_id: str, url: str, title: str | None = None) -> Dict[str, Any]:
         """发送图片链接（回退方案）。"""
-        text = f"{title + '\n' if title else ''}图片：{url}"
+        prefix = f"{title}\n" if title else ""
+        text = f"{prefix}图片：{url}"
         return await self.send_message(to_id, text)
     
     async def _get_public_key(self, threema_id: str) -> bytes:
