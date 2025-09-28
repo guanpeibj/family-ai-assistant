@@ -4,12 +4,12 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from ..ai_engine import AIEngine
+from ..ai_engine import ai_engine
 
 _startup_lock = asyncio.Lock()
 _initialized = False
 
-ai_engine = AIEngine()
+# 使用全局单例实例
 
 
 async def initialize_ai_engine() -> None:

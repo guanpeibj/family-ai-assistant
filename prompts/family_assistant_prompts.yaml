@@ -72,6 +72,10 @@ blocks:
         "context_link": {"scope": string, "person_ids": string[] | null},
         "occurred_at": string | null,
         "update_existing": boolean | null,
+        "thinking_depth": integer (0-3),
+        "needs_deeper_analysis": boolean,
+        "analysis_reasoning": string | null,
+        "next_exploration_areas": string[],
         "metadata": object
       },
       "context_requests": [
@@ -88,16 +92,30 @@ blocks:
         "requires_context": string[],
         "steps": [
           {"tool": string, "args": object}
-        ]
+        ],
+        "verification": {
+          "check_completeness": boolean,
+          "min_results_expected": integer | null,
+          "fallback_strategy": string | null
+        } | null
       },
       "response_directives": {
         "profile": "default" | "compact" | "detailed",
         "tone": string | null,
-        "focus_points": string[] | null
+        "focus_points": string[] | null,
+        "analysis_structure": {
+          "include_summary": boolean,
+          "include_details": boolean,
+          "include_trends": boolean,
+          "include_recommendations": boolean,
+          "visualization_needed": boolean
+        } | null
       }
     }
     - 当无需某些字段时，置为 null、空数组或省略。
     - `context_link.scope` 可取 "self"、"family"、"person"，用于描述数据作用范围，默认按家庭整体(`"family"`)处理，除非用户明确限定个人。
+    - `thinking_depth` 表示问题复杂度：0=简单记录，1=需要关联，2=需要分析，3=需要推理。
+    - 如 `needs_deeper_analysis` 为 true，表示需要基于初步结果进行更深入分析。
     - 如确定无需额外上下文，将 `context_requests` 设为空数组。
     - 如当前无法规划工具，返回空 `steps` 并在 `requires_context` 说明原因。
 
@@ -145,12 +163,132 @@ blocks:
     {task_context}
     重点强调已完成的动作与关键数据。如无成功动作，诚实说明正在等待数据或已发起澄清。
 
+  intelligent_context_strategy: |
+    ## 智能上下文获取策略
+    分析用户问题时，主动思考并请求多维度相关信息：
+    
+    ### 时序维度
+    - 涉及"变化"、"趋势"、"增长"等词 → 获取历史时序数据
+    - 涉及"最近"、"上个月"、"今年"等时间 → 获取对应时间段数据
+    - 需要对比分析 → 获取多个时间段的数据
+    
+    ### 实体关联维度
+    - 提到家庭成员（如"儿子"、"女儿"）→ 获取该成员所有相关记录
+    - 提到特定指标（如"身高"、"体重"）→ 同时获取相关健康指标
+    - 提到财务类别 → 获取相关类别的所有支出
+    
+    ### 领域关联维度
+    - 健康问题 → 同时考虑：身高、体重、疫苗、用药、营养摄入、运动记录
+    - 财务问题 → 同时考虑：收入、支出、预算、趋势、异常项
+    - 日程提醒 → 同时考虑：相关人员、关联事件、历史记录
+    
+    ### 因果关联维度
+    - 寻找可能的原因：如身高变化 → 查找营养支出、运动记录、睡眠情况
+    - 预测潜在影响：如大额支出 → 查看预算影响、后续计划
+    
+    ### 智能请求示例
+    用户问"儿子身高变化"时，应请求：
+    1. {"name": "height_history", "kind": "direct_search", "filters": {"person": "儿子", "metric": "身高"}, "limit": 20}
+    2. {"name": "weight_history", "kind": "direct_search", "filters": {"person": "儿子", "metric": "体重"}, "limit": 10}
+    3. {"name": "nutrition_expenses", "kind": "semantic_search", "query": "牛奶 钙片 维生素 营养品 蛋白质", "limit": 10}
+    4. {"name": "health_records", "kind": "direct_search", "filters": {"person": "儿子", "type": "health"}, "limit": 10}
+    5. {"name": "exercise_activities", "kind": "semantic_search", "query": "运动 篮球 游泳 体育", "filters": {"person": "儿子"}, "limit": 5}
+    
+    记住：宁可多获取相关信息，也不要信息不足！
+
+  thinking_loop_strategy: |
+    ## 思考循环策略
+    在understanding中增加thinking_depth字段，指导深度思考：
+    
+    ### 何时需要深度思考
+    - 复杂查询：涉及多个维度或需要推理
+    - 趋势分析：需要历史数据和模式识别
+    - 决策建议：需要综合多方面信息
+    - 异常检测：需要对比和分析
+    
+    ### 思考深度级别
+    - level 0：简单记录或查询，无需额外思考
+    - level 1：需要关联查询，获取相关上下文
+    - level 2：需要多轮分析，逐步深化理解
+    - level 3：需要综合推理，整合多源信息
+    
+    ### 输出增强
+    "understanding"中增加：
+    {
+      "thinking_depth": 0-3,
+      "needs_deeper_analysis": boolean,
+      "analysis_reasoning": string,
+      "next_exploration_areas": [string]
+    }
+    
+    如果needs_deeper_analysis为true，表示需要基于初步结果继续探索。
+
+  tool_feedback_optimization: |
+    ## 工具执行反馈优化
+    执行工具后，智能验证结果并决定是否需要补充：
+    
+    ### 结果验证维度
+    1. **完整性检查**
+       - 数据是否完整回答了用户问题？
+       - 是否有明显的信息缺失？
+       - 时间范围是否充分？
+    
+    2. **相关性验证**
+       - 返回的数据是否真正相关？
+       - 是否需要调整搜索条件？
+       - 是否需要扩大或缩小范围？
+    
+    3. **异常识别**
+       - 数据中是否有异常值？
+       - 是否需要深入调查某个异常？
+       - 趋势是否符合预期？
+    
+    ### 补充策略
+    在tool_plan中可以包含verification字段：
+    {
+      "verification": {
+        "check_completeness": true,
+        "min_results_expected": number,
+        "fallback_strategy": "expand_search" | "try_different_approach" | "request_clarification"
+      }
+    }
+    
+    ### 迭代优化
+    - 第一轮：执行初步计划
+    - 验证：检查结果质量
+    - 第二轮：根据需要补充查询
+    - 最多3轮，避免过度消耗
+
+  comprehensive_analysis_guide: |
+    ## 综合分析指导
+    面对复杂问题时的分析框架：
+    
+    ### 分析步骤
+    1. **问题分解**：将复杂问题分解为多个子问题
+    2. **信息收集**：为每个子问题收集相关数据
+    3. **模式识别**：识别数据中的模式和趋势
+    4. **关联分析**：找出不同数据间的关联
+    5. **综合判断**：基于全面信息给出结论
+    
+    ### 输出结构化
+    对于复杂分析，在response_directives中设置：
+    {
+      "analysis_structure": {
+        "include_summary": true,
+        "include_details": true,
+        "include_trends": true,
+        "include_recommendations": true,
+        "visualization_needed": boolean
+      }
+    }
+
 prompts:
   v4_default:
     name: "FAA 默认配置"
     description: "主家庭助手视角"
     system_blocks:
       - system_identity
+      
       - system_values
       - safety_boundaries
       - operations_overview
@@ -159,8 +297,11 @@ prompts:
       - dynamic_tools_intro
     understanding_blocks:
       - understanding_contract
+      - intelligent_context_strategy
+      - thinking_loop_strategy
       - context_requests_examples
       - planning_brief
+      - comprehensive_analysis_guide
     response_blocks:
       - response_contract
       - response_voice_default
@@ -172,6 +313,7 @@ prompts:
       - ack_prompt
     tool_planning_blocks:
       - planning_brief
+      - tool_feedback_optimization
     profiles:
       threema:
         response_blocks:

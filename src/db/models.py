@@ -42,7 +42,17 @@ class UserChannel(Base):
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
-    channel = Column(Enum(ChannelType), nullable=False)
+    channel = Column(
+        Enum(
+            ChannelType,
+            name="channel_type",
+            create_type=False,
+            native_enum=True,
+            validate_strings=True,
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+    )
     channel_user_id = Column(String(255), nullable=False)  # Threema ID、邮箱、OpenID等
     channel_data = Column(JSONB)  # 渠道特定数据（如昵称等）
     is_primary = Column(Boolean, default=False)

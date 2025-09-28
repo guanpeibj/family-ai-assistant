@@ -68,6 +68,7 @@
 
 ### 家庭成员详细信息
 - ✅ member_key（稳定 ID，避免因称呼变化导致数据错位）
+- ✅ user_id（统一身份别名，所有渠道共用，可选但推荐与 member_key 一致）
 - ✅ names（formal / english / nickname / preferred）
 - ✅ 姓名/昵称
 - ✅ 出生日期/年龄
@@ -88,6 +89,7 @@
 
 ### 账号与渠道
 - ✅ Threema / Email / 微信等账号，可在 `accounts` 中声明
+- ✅ `accounts` 未显式指定 `user_id` 时，会自动继承成员的 `user_id`
 - ✅ `labels` 字段可描述该账号用途（例如“家庭群主”）
 - ✅ `channel_data` 可附加额外元信息（如昵称、签名）
 
@@ -191,3 +193,4 @@ docker-compose run --rm faa-api python scripts/init_family_data.py
 - 所有初始化写入的 `memories` 都带有 `family_scope=true`、`household_slug` 和 `member_key`，AI 可根据意图灵活检索。
 - `metadata`、`ai_playbook`、`seasonal_playbook`：为 AI 提供快速策略、语气和提醒触发条件，减少工程硬编码。
 - `profile.names` 与 `profile.life_status`：帮助 AI 选择恰当称呼、尊重去世成员并生成合适的情感回应。
+- 成员级 `user_id` 用于统一 API/Threema/Email 的身份；未在 `accounts` 中声明时也能通过 `/message` 使用该别名。

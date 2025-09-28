@@ -1,203 +1,19 @@
 {
-  "source": "enhanced_example",
+  "source": "example_seed_v2",
   "username": "family_default",
-  "threema_id": "YOUR_THREEMA_ID",
   "household": {
     "slug": "family_default",
-    "display_name": "阿福的示例家庭",
-    "description": "用于展示家庭数据填充方式的示例",
+    "display_name": "阿福示例家庭",
+    "description": "用于展示如何在一个 JSON 文件里定义完整的家庭画像与账号映射。",
     "timezone": "Asia/Shanghai"
   },
-  
   "family_members": [
     {
-      "member_key": "daughter_1",
-      "name": "大女儿",
-      "role": "daughter", 
-      "birthday": "2016-05-20",
-      "names": {
-        "formal": "张思思",
-        "english": "Sisi Zhang",
-        "nickname": "思思",
-        "preferred": "思思"
-      },
-      "life_status": {
-        "status": "alive"
-      },
-      "notes": "喜欢画画，性格活泼，有创造力",
-      "preferences": {
-        "food": ["水果", "酸奶", "面条"],
-        "activities": ["画画", "看动画片", "玩积木"],
-        "bedtime": "20:30"
-      },
-      "communication_style": {
-        "tone": "多鼓励、耐心解释",
-        "responds_well_to": ["共同制定计划", "奖励式提醒"],
-        "avoid": ["高压口吻"]
-      },
-      "motivators": {
-        "reward": "完成作业后可以画喜欢的角色",
-        "long_term_goal": "参加校内绘画比赛"
-      },
-      "health": {
-        "allergies": [],
-        "last_checkup": "2024-06-15",
-        "vaccination_status": "up_to_date",
-        "growth_tracking": true
-      },
-      "education": {
-        "school": "XX小学",
-        "grade": "小学一年级",
-        "teacher": "李老师",
-        "focus_subjects": ["语文阅读", "绘画创作"],
-        "support_needed": "需要在数学应用题上提供分步骤讲解"
-      },
-      "weekly_schedule": {
-        "after_school": {
-          "Mon": "钢琴课",
-          "Wed": "绘画社团",
-          "Fri": "家庭阅读时光"
-        }
-      },
-      "chores": [
-        {"task": "整理自己的书桌", "frequency": "daily"},
-        {"task": "周末折叠洗好的衣服", "frequency": "weekly"}
-      ]
-    },
-    {
-      "member_key": "daughter_2",
-      "name": "二女儿",
-      "role": "daughter",
-      "birthday": "2019-09-10",
-      "names": {
-        "formal": "张甜甜",
-        "english": "Tiantian Zhang",
-        "nickname": "甜甜",
-        "preferred": "甜甜"
-      },
-      "life_status": {
-        "status": "alive"
-      },
-      "notes": "花粉过敏，比较内向但很细心",
-      "preferences": {
-        "food": ["粥", "蒸蛋", "香蕉"],
-        "activities": ["看书", "拼图", "听故事"],
-        "bedtime": "20:00"
-      },
-      "communication_style": {
-        "tone": "先肯定再提出建议",
-        "responds_well_to": ["提供两个可选答案", "使用图像提示"],
-        "avoid": ["突然改变计划"]
-      },
-      "motivators": {
-        "reward": "完成任务后可选择睡前故事",
-        "comfort_items": ["小熊玩偶", "薰衣草香包"]
-      },
-      "health": {
-        "allergies": ["花粉", "柳絮"],
-        "medications": ["抗过敏药"],
-        "last_checkup": "2024-07-10",
-        "vaccination_status": "up_to_date",
-        "growth_tracking": true,
-        "trigger_alerts": ["春季外出需佩戴口罩", "回家立即洗脸换衣"]
-      },
-      "education": {
-        "school": "XX幼儿园",
-        "class": "大班",
-        "teacher": "王老师",
-        "focus_subjects": ["社交表达", "动手能力"],
-        "support_needed": "在集体活动前给予心理准备"
-      },
-      "weekly_schedule": {
-        "therapy": {
-          "Tue": "语言表达训练",
-          "Thu": "绘本阅读课"
-        }
-      },
-      "chores": [
-        {"task": "饭后收拾餐具", "frequency": "daily", "requires_supervision": true}
-      ]
-    },
-    {
-      "member_key": "son",
-      "name": "儿子",
-      "role": "son",
-      "birthday": "2022-01-15",
-      "names": {
-        "formal": "张小宇",
-        "english": "Leo Zhang",
-        "nickname": "小宇",
-        "preferred": "小宇"
-      },
-      "life_status": {
-        "status": "alive"
-      },
-      "notes": "作息规律，早睡，喜欢音乐",
-      "preferences": {
-        "food": ["奶粉", "米粉", "水果泥"],
-        "activities": ["听音乐", "看移动玩具", "户外散步"],
-        "bedtime": "19:30"
-      },
-      "communication_style": {
-        "tone": "柔和慢速",
-        "responds_well_to": ["配合手势", "唱歌提示"],
-        "avoid": ["音量突然增大"]
-      },
-      "health": {
-        "allergies": [],
-        "last_checkup": "2024-08-01",
-        "vaccination_status": "scheduled",
-        "next_vaccine": "2024-09-15",
-        "growth_tracking": true
-      },
-      "development": {
-        "milestones": ["会走路", "会说简单词语"],
-        "next_expected": "更多词汇",
-        "support_plan": "每天 10 分钟词汇互动，关注模仿发音"
-      },
-      "soothing_methods": ["白噪音", "轻拍背部", "音乐盒"]
-    },
-    {
-      "member_key": "mom",
-      "name": "妻子",
-      "role": "mother",
-      "names": {
-        "formal": "李燕",
-        "english": "Anna Li",
-        "nickname": "燕燕",
-        "preferred": "燕燕"
-      },
-      "life_status": {
-        "status": "alive"
-      },
-      "notes": "负责日常采买，关注营养搭配",
-      "preferences": {
-        "responsibilities": ["采买", "烹饪", "孩子健康管理"],
-        "shopping_habits": ["周末集中采购", "关注打折信息"]
-      },
-      "health": {
-        "last_checkup": "2024-05-20",
-        "health_focus": ["睡眠不足", "需要更多休息时间"],
-        "stress_triggers": ["孩子们同日有活动", "连续熬夜"],
-        "self_care_goals": ["每周瑜伽两次", "保证 7 小时睡眠"]
-      },
-      "accounts": [
-        {
-          "channel": "email",
-          "channel_user_id": "mom@example.com",
-          "labels": {"usage": "主要邮箱"}
-        }
-      ],
-      "support_needs": {
-        "preferred_reminder_channel": "email",
-        "reminder_examples": ["周二补充过敏药", "周六采购清单复核"],
-        "encourage_rest": true
-      }
-    },
-    {
       "member_key": "dad",
+      "user_id": "dad",
       "name": "我",
       "role": "father",
+      "birthday": "1988-03-12",
       "names": {
         "formal": "张磊",
         "english": "Leo Zhang",
@@ -207,32 +23,223 @@
       "life_status": {
         "status": "alive"
       },
-      "notes": "预算关注者，技术背景",
+      "notes": "家庭财务负责人，擅长数据分析，喜欢把事情流程化。",
       "preferences": {
-        "responsibilities": ["财务管理", "技术支持", "教育规划"],
-        "tracking_habits": ["记账", "数据分析", "长期规划"]
+        "responsibilities": ["家庭预算", "投资规划", "教育规划"],
+        "tracking_habits": ["每日记账", "周度复盘", "季度目标回顾"]
       },
       "work": {
-        "schedule": "工作日忙碌",
-        "available_time": "晚上和周末"
+        "schedule": "工作日 09:00-18:00",
+        "available_time": "晚上 19:30 之后与周末",
+        "commute_mode": "地铁"
+      },
+      "support_needs": {
+        "financial_review_day": "Sunday",
+        "prefers_summary_format": "表格 + 三条重点",
+        "decision_style": "给出数据与行动建议"
       },
       "accounts": [
         {
           "channel": "threema",
-          "channel_user_id": "YOUR_THREEMA_ID",
+          "channel_user_id": "EXAMPLE_THREEMA_DAD",
           "is_primary": true,
-          "labels": {"note": "家庭群主"}
+          "labels": {
+            "usage": "家庭群主",
+            "remarks": "所有提醒优先发这里"
+          }
+        },
+        {
+          "channel": "email",
+          "channel_user_id": "dad@example.com",
+          "labels": {
+            "usage": "每周财务报告"
+          }
         }
       ],
-      "support_needs": {
-        "financial_review_day": "Sunday",
-        "prefers_summary_format": "表格 + 三条要点",
-        "decision_style": "数据支撑后给出行动建议"
-      }
-    }
-    ,
+      "chores": [
+        {"task": "每周核对账本", "frequency": "weekly"},
+        {"task": "每月整理重要文件", "frequency": "monthly"}
+      ]
+    },
     {
-      "member_key": "grandpa",
+      "member_key": "mom",
+      "user_id": "mom",
+      "name": "妻子",
+      "role": "mother",
+      "birthday": "1990-07-08",
+      "names": {
+        "formal": "李芳",
+        "english": "Fiona Li",
+        "nickname": "小芳",
+        "preferred": "芳芳"
+      },
+      "life_status": {
+        "status": "alive"
+      },
+      "notes": "家庭运营官，负责日常采买与孩子健康管理，偏好结构化提醒。",
+      "preferences": {
+        "responsibilities": ["饮食营养", "家庭日程", "健康档案"],
+        "shopping_habits": ["周六上午集中采购", "关注当季食材"]
+      },
+      "health": {
+        "last_checkup": "2024-06-20",
+        "health_focus": ["睡眠质量", "肩颈放松"],
+        "stress_triggers": ["连续熬夜", "临时改计划"]
+      },
+      "support_needs": {
+        "preferred_reminder_channel": "email",
+        "reminder_examples": ["周二补充过敏药", "周六采购清单确认"],
+        "encourage_rest": true
+      },
+      "accounts": [
+        {
+          "channel": "email",
+          "channel_user_id": "mom@example.com",
+          "is_primary": true,
+          "labels": {
+            "usage": "个人收件箱",
+            "remarks": "提醒与采购清单"
+          }
+        },
+        {
+          "channel": "wechat",
+          "channel_user_id": "wechat_mom_id",
+          "labels": {
+            "usage": "紧急提醒"
+          }
+        }
+      ],
+      "chores": [
+        {"task": "每日餐食安排", "frequency": "daily"},
+        {"task": "孩子健康记录", "frequency": "weekly"}
+      ]
+    },
+    {
+      "member_key": "daughter_1",
+      "user_id": "daughter_1",
+      "name": "大女儿",
+      "role": "daughter",
+      "birthday": "2014-11-02",
+      "names": {
+        "formal": "张思琪",
+        "english": "Sophie Zhang",
+        "nickname": "琪琪",
+        "preferred": "琪琪"
+      },
+      "life_status": {
+        "status": "alive"
+      },
+      "notes": "性格外向，喜欢艺术与公开演讲，希望培养自律。",
+      "preferences": {
+        "food": ["水果", "酸奶", "意面"],
+        "activities": ["钢琴", "绘画", "演讲俱乐部"],
+        "bedtime": "20:45"
+      },
+      "education": {
+        "school": "光华小学",
+        "grade": "五年级",
+        "teacher": "陈老师",
+        "focus_subjects": ["语文阅读", "英语写作"],
+        "support_needed": "数学应用题需要分步骤讲解"
+      },
+      "communication_style": {
+        "tone": "先肯定再给建议",
+        "responds_well_to": ["乐观表达", "具体步骤"],
+        "avoid": ["直接否定"]
+      },
+      "accounts": [
+        {
+          "channel": "email",
+          "channel_user_id": "sophie@example.com",
+          "labels": {
+            "usage": "学校通知"
+          }
+        }
+      ],
+      "weekly_schedule": {
+        "Mon": "钢琴课",
+        "Wed": "演讲社团",
+        "Fri": "家庭阅读夜"
+      },
+      "chores": [
+        {"task": "整理书桌", "frequency": "daily"},
+        {"task": "周末折叠衣物", "frequency": "weekly"}
+      ]
+    },
+    {
+      "member_key": "son",
+      "user_id": "son",
+      "name": "儿子",
+      "role": "son",
+      "birthday": "2018-05-15",
+      "names": {
+        "formal": "张笑宇",
+        "english": "Lucas Zhang",
+        "nickname": "小宇",
+        "preferred": "小宇"
+      },
+      "life_status": {
+        "status": "alive"
+      },
+      "notes": "内向细腻的小朋友，喜欢动手实验，对科学故事特别感兴趣。",
+      "preferences": {
+        "food": ["清蒸鸡腿", "玉米", "苹果"],
+        "activities": ["积木", "科学实验", "桌游"],
+        "bedtime": "20:00"
+      },
+      "health": {
+        "allergies": ["花粉"],
+        "medications": ["抗过敏喷雾"],
+        "last_checkup": "2024-08-10",
+        "growth_tracking": true,
+        "trigger_alerts": ["春季外出需戴口罩", "回家先洗脸"]
+      },
+      "communication_style": {
+        "tone": "温柔慢速",
+        "responds_well_to": ["图片提示", "故事引导"],
+        "avoid": ["突然改变安排"]
+      },
+      "accounts": [],
+      "weekly_schedule": {
+        "Tue": "科学探索课",
+        "Thu": "绘本阅读俱乐部"
+      },
+      "chores": [
+        {"task": "饭后收拾餐具", "frequency": "daily", "requires_supervision": true}
+      ]
+    },
+    {
+      "member_key": "grandma",
+      "user_id": "grandma",
+      "name": "外婆",
+      "role": "grandmother",
+      "names": {
+        "formal": "李玉兰",
+        "english": "Lily Li",
+        "nickname": "外婆",
+        "preferred": "外婆"
+      },
+      "life_status": {
+        "status": "alive"
+      },
+      "notes": "周末会来家里陪伴孩子，善于和孩子聊天与分享故事。",
+      "preferences": {
+        "activities": ["家庭包饺子", "讲故事", "散步"],
+        "bedtime": "22:00"
+      },
+      "accounts": [
+        {
+          "channel": "wechat",
+          "channel_user_id": "wechat_grandma_id",
+          "labels": {
+            "usage": "家庭联系"
+          }
+        }
+      ]
+    },
+    {
+      "member_key": "grandpa_memory",
+      "user_id": "grandpa_memory",
       "name": "爷爷",
       "role": "grandfather",
       "names": {
@@ -245,21 +252,20 @@
         "status": "deceased",
         "deceased_at": "2021-04-12",
         "age_at_passing": 72,
-        "notes": "全家缅怀，逢忌日会前往墓园祭扫"
+        "notes": "每年清明节全家扫墓纪念，分享爷爷的诚信与勤俭故事。"
       },
       "legacy_notes": {
         "family_values": ["守信", "勤俭"],
-        "traditions": "每年清明一起扫墓",
-        "stories_to_share": ["爷爷年轻时的创业经历"]
+        "traditions": "清明节一起扫墓并讲述往事",
+        "stories_to_share": ["爷爷年轻时创业帮助乡亲的经历"]
       }
     }
   ],
-  
   "preferences": [
     {
       "category": "budget",
       "target": "food",
-      "amount": 3000,
+      "amount": 3500,
       "currency": "CNY",
       "priority": "high",
       "applies_to": "household",
@@ -268,20 +274,19 @@
         "notify_member_keys": ["dad", "mom"],
         "suggest_meal_plan": true
       },
-      "notes": "餐饮预算每月 3000 元，注重营养均衡"
+      "notes": "保证早餐营养、晚餐少油少盐。"
     },
     {
       "category": "budget",
       "target": "education",
-      "amount": 2000,
+      "amount": 2500,
       "currency": "CNY",
       "priority": "high",
-      "applies_to": ["daughter_1", "daughter_2"],
+      "applies_to": ["daughter_1", "son"],
       "automation": {
         "highlight_upcoming_fees": true,
-        "remind_days_before": 5
-      },
-      "notes": "教育投资预算用于课外班和学校费用"
+        "remind_days_before": 7
+      }
     },
     {
       "category": "health_tracking",
@@ -290,7 +295,7 @@
         {"name": "weight", "unit": "kg"}
       ],
       "tracking_frequency": "monthly",
-      "applies_to": ["daughter_1", "daughter_2", "son"],
+      "applies_to": ["daughter_1", "son"],
       "automation": {
         "auto_create_growth_entry": true,
         "remind_day": "first_sunday"
@@ -301,141 +306,124 @@
       "bedtime_children": "20:30",
       "bedtime_adults": "23:00",
       "checkpoints": [
-        {"time": "19:45", "action": "提醒开始睡前流程", "targets": ["daughter_1", "daughter_2"]},
-        {"time": "23:00", "action": "提示父母准备休息", "targets": ["mom", "dad"]}
+        {"time": "19:45", "action": "提醒孩子开始睡前流程", "targets": ["daughter_1", "son"]},
+        {"time": "23:00", "action": "提示爸妈准备休息", "targets": ["mom", "dad"]}
       ]
     },
     {
       "category": "financial_habit",
-      "strategy": ["比价三天后再决定", "消费超过 500 元需双人确认"],
+      "strategy": ["超过 500 元的消费需要双人确认", "先列清单再采购"],
       "applies_to": ["mom", "dad"],
       "automation": {
         "prompt_before_large_purchase": 500,
         "log_into_finance_channel": true
       }
-    },
-    {
-      "category": "nutrition_rule",
-      "rule": "每周至少两次家庭共同用餐，周日做营养复盘",
-      "applies_to": "household",
-      "automation": {
-        "generate_weekly_summary": true,
-        "focus_on": ["蔬菜摄入", "儿童蛋白质"]
-      }
     }
   ],
-  
   "important_info": [
     {
       "content": "家门钥匙放在玄关抽屉最里面",
       "tag": "keys_location",
       "location": "玄关抽屉",
-      "updated": "2024-08-01"
+      "updated": "2024-08-15"
     },
     {
-      "content": "家庭 Wi-Fi SSID=HomeWiFi，密码=12345678",
-      "tag": "wifi_password", 
-      "ssid": "HomeWiFi",
-      "password": "12345678",
-      "security": "WPA2"
+      "content": "家庭 Wi-Fi SSID=HomeNest，密码=SafeHome2024",
+      "tag": "wifi_password",
+      "ssid": "HomeNest",
+      "password": "SafeHome2024",
+      "security": "WPA3"
     },
     {
-      "content": "应急药品放在主卧衣柜上层",
+      "content": "应急药品放在厨房旁储物柜上层",
       "tag": "emergency_supplies",
-      "location": "主卧衣柜上层",
-      "items": ["退烧药", "创可贴", "体温计", "抗过敏药"]
+      "location": "储物柜上层",
+      "items": ["退烧药", "创可贴", "抗过敏喷雾", "电子体温计"]
     },
     {
-      "content": "重要证件放在书房保险柜",
+      "content": "重要证件在书房保险柜，密码 4653",
       "tag": "important_documents",
       "location": "书房保险柜",
-      "items": ["身份证复印件", "户口本", "疫苗接种证"]
+      "items": ["身份证", "护照", "房产证", "保险单"]
     }
   ],
-  
   "contacts": [
     {
-      "content": "小儿科医生：王医生 13800000000，XX医院",
-      "name": "王医生",
+      "content": "家庭医生：王敏 13800001111，星河医院",
+      "name": "王敏",
       "type": "doctor",
-      "department": "pediatrics",
-      "hospital": "XX医院",
-      "phone": "13800000000",
-      "speciality": ["儿童常见病", "疫苗接种"],
-      "related_members": ["daughter_1", "daughter_2", "son"],
-      "preferred_contact_time": "09:00-17:00"
+      "department": "family_medicine",
+      "hospital": "星河医院",
+      "phone": "13800001111",
+      "related_members": ["dad", "mom", "daughter_1", "son"],
+      "preferred_contact_time": "09:00-16:00"
     },
     {
-      "content": "大女儿班主任：李老师 138xxxx1234",
-      "name": "李老师", 
+      "content": "大女儿班主任：刘老师 13900002222",
+      "name": "刘老师",
       "type": "teacher",
-      "phone": "138xxxx1234",
-      "school": "XX小学",
-      "grade": "一年级",
+      "phone": "13900002222",
+      "school": "光华小学",
+      "grade": "五年级",
       "related_members": ["daughter_1"],
-      "communication_notes": "请提前一天预约家校沟通"
+      "communication_notes": "每周二 16:00-18:00 可电话沟通"
     },
     {
-      "content": "二女儿老师：王老师 138xxxx5678",
-      "name": "王老师",
-      "type": "teacher", 
-      "phone": "138xxxx5678",
-      "school": "XX幼儿园",
-      "class": "大班",
-      "related_members": ["daughter_2"],
-      "communication_notes": "周四下午方便沟通"
+      "content": "儿子幼儿园老师：吴老师 13900003333",
+      "name": "吴老师",
+      "type": "teacher",
+      "phone": "13900003333",
+      "school": "育英幼儿园",
+      "class": "中班",
+      "related_members": ["son"],
+      "communication_notes": "建议通过班级群留言安排"
     },
     {
-      "content": "家政服务：张阿姨 139xxxx9999",
+      "content": "家政服务：张阿姨 13900004444，每周六 14:00 到家",
       "name": "张阿姨",
       "type": "domestic_helper",
-      "phone": "139xxxx9999",
+      "phone": "13900004444",
       "services": ["清洁", "整理"],
-      "schedule": "每周二",
-      "related_members": ["mom"],
-      "entry_requirements": "提前 1 小时通知，钥匙在玄关抽屉"
+      "schedule": "Saturday",
+      "entry_requirements": "提前 2 小时通知，钥匙在玄关抽屉"
     },
     {
-      "content": "紧急联系人：姥姥 136xxxx7777",
-      "name": "姥姥",
+      "content": "紧急联系人：外婆 13700005555",
+      "name": "外婆",
       "type": "emergency_contact",
-      "phone": "136xxxx7777",
+      "phone": "13700005555",
       "relationship": "maternal_grandmother",
-      "related_members": ["mom", "children"],
       "availability": "全天"
     }
   ],
-  
   "address": {
-    "city": "北京",
-    "district": "海淀",
-    "neighborhood": "XX小区",
+    "city": "上海",
+    "district": "浦东新区",
+    "neighborhood": "星辰花园",
     "nearby_facilities": {
-      "hospital": "XX医院（2公里）",
-      "school": "XX小学（500米）",
-      "kindergarten": "XX幼儿园（800米）", 
-      "supermarket": "XX超市（200米）",
-      "park": "XX公园（1公里）"
+      "hospital": "星河医院（1.5 公里）",
+      "primary_school": "光华小学（400 米）",
+      "kindergarten": "育英幼儿园（600 米）",
+      "supermarket": "万家超市（200 米）",
+      "park": "清风公园（800 米）"
     }
   },
-  
   "budget": {
     "currency": "CNY",
     "monthly_categories": {
-      "food": 3000,
-      "education": 2000,
-      "healthcare": 1000,
-      "utilities": 800,
-      "transportation": 600,
-      "entertainment": 500,
-      "clothing": 800,
-      "household": 400,
-      "emergency": 1000
+      "food": 3500,
+      "education": 2500,
+      "healthcare": 1200,
+      "utilities": 900,
+      "transportation": 700,
+      "entertainment": 600,
+      "household": 500,
+      "emergency": 1500
     },
     "annual_goals": {
-      "education_fund": 50000,
-      "emergency_fund": 100000,
-      "travel": 20000
+      "education_fund": 60000,
+      "emergency_fund": 120000,
+      "travel": 25000
     },
     "tracking_rules": {
       "alert_threshold": 0.8,
@@ -444,32 +432,32 @@
       "household_dashboard": {
         "owner": "dad",
         "share_with": ["mom"],
-        "preferred_format": "周报 + 三条风险提示"
+        "preferred_format": "Excel + 图表",
+        "remind_day": "Sunday"
       }
     }
   },
-  
   "routines": [
     {
       "type": "daily",
       "name": "晨起流程",
       "time": "07:00",
-      "description": "孩子们起床、洗漱、早餐",
-      "participants": ["大女儿", "二女儿", "儿子"],
+      "description": "孩子起床、洗漱、早餐",
+      "participants": ["daughter_1", "son"],
       "ai_actions": [
-        {"time_offset": "-10m", "message": "提醒妈妈准备早餐", "channel": "threema"},
-        {"time_offset": "0m", "message": "播放孩子喜欢的晨起歌单", "channel": "home_speaker"}
+        {"time_offset": "-10m", "message": "提醒准备早餐与牛奶", "channel": "threema", "target_member_keys": ["mom"]},
+        {"time_offset": "0m", "message": "播放晨起歌单", "channel": "home_speaker"}
       ]
     },
     {
-      "type": "daily", 
+      "type": "daily",
       "name": "晚间流程",
       "time": "19:30",
-      "description": "晚餐后、洗澡、睡前故事",
+      "description": "晚餐后整理、洗澡、睡前故事",
       "participants": ["全家"],
       "ai_actions": [
-        {"time_offset": "0m", "message": "先提醒儿子洗澡", "target_member_keys": ["son"]},
-        {"time_offset": "+30m", "message": "选择睡前故事：动物或太空？", "target_member_keys": ["daughter_2"]}
+        {"time_offset": "0m", "message": "提醒儿子洗澡并准备睡衣", "target_member_keys": ["son"]},
+        {"time_offset": "+30m", "message": "选择睡前故事主题：探险或动物？", "target_member_keys": ["daughter_1", "son"]}
       ]
     },
     {
@@ -477,115 +465,98 @@
       "name": "周末采购",
       "day": "Saturday",
       "time": "09:00",
-      "description": "全家一周食材和生活用品采购",
-      "responsible": "妻子",
+      "description": "补充家庭食材和日用品",
+      "responsible": "mom",
       "ai_actions": [
-        {"time_offset": "-1d", "message": "汇总本周缺货清单", "channel": "email", "target_member_keys": ["mom"]},
-        {"time_offset": "0m", "message": "出门前查看天气和出行路线", "channel": "threema", "target_member_keys": ["mom", "dad"]}
+        {"time_offset": "-1d", "message": "汇总结存与缺货清单", "channel": "email", "target_member_keys": ["mom", "dad"]},
+        {"time_offset": "-1h", "message": "查看天气与交通状况", "channel": "threema", "target_member_keys": ["mom"]}
       ]
     },
     {
       "type": "monthly",
-      "name": "体检记录",
-      "description": "记录孩子们的身高体重，更新成长档案",
-      "participants": ["大女儿", "二女儿", "儿子"],
+      "name": "成长记录",
+      "description": "更新孩子身高体重与学习亮点",
+      "participants": ["daughter_1", "son"],
       "ai_actions": [
-        {"time_offset": "0m", "message": "提示录入身高体重并更新趋势图", "channel": "threema", "target_member_keys": ["dad"]}
+        {"time_offset": "0m", "message": "上传成长数据并生成趋势图", "channel": "threema", "target_member_keys": ["dad"]}
       ]
     }
   ],
-  
   "seasonal_playbook": [
     {
       "season": "spring",
-      "focus": ["二女儿花粉过敏预防", "春季感冒预防"],
+      "focus": ["花粉过敏防护", "春季感冒预防"],
       "ai_reminders": [
-        {"trigger": "pollen_index_high", "message": "提醒二女儿出门戴口罩，回家立即洗脸"},
-        {"trigger": "weekend", "message": "建议安排一次户外踏青并携带备选过敏药"}
+        {"trigger": "pollen_index_high", "message": "提醒小宇戴口罩，回家立即洗脸换衣"},
+        {"trigger": "weekend", "message": "建议安排一次户外踏青并携带过敏药"}
       ]
     },
     {
       "season": "summer",
-      "focus": ["防晒", "补水", "避免中暑"],
+      "focus": ["防晒", "补水", "暑期活动"],
       "ai_reminders": [
-        {"trigger": "temperature_above_32", "message": "提醒准备遮阳帽和防晒霜"},
-        {"trigger": "weekly", "message": "推荐一次家庭游泳或室内避暑活动"}
+        {"trigger": "temperature_above_32", "message": "准备防晒霜与遮阳帽"},
+        {"trigger": "school_holiday_start", "message": "推荐亲子夏令营活动"}
       ]
     },
     {
       "season": "autumn",
-      "focus": ["开学节奏", "保湿保暖"],
+      "focus": ["开学调整", "保湿保暖"],
       "ai_reminders": [
-        {"trigger": "school_start", "message": "检查大女儿和二女儿文具、校服"},
-        {"trigger": "humidity_below_40", "message": "提示开启加湿器并补充润喉茶"}
+        {"trigger": "school_start", "message": "检查学习用品并设定学习计划"},
+        {"trigger": "humidity_below_40", "message": "提醒开启加湿器"}
       ]
     },
     {
       "season": "winter",
-      "focus": ["流感预防", "节日准备"],
+      "focus": ["流感预防", "春节筹备"],
       "ai_reminders": [
-        {"trigger": "flu_alert", "message": "安排全家进行流感疫苗咨询"},
-        {"trigger": "lunar_new_year_minus_14", "message": "生成春节待办清单"}
+        {"trigger": "flu_alert", "message": "安排全家流感疫苗咨询"},
+        {"trigger": "lunar_new_year_minus_14", "message": "生成春节采购与礼物清单"}
       ]
     }
   ],
-  
   "growth_milestones": {
-    "大女儿": {
-      "academic": ["识字量达标", "数学计算", "阅读理解"],
-      "social": ["与同学相处", "独立性培养"],
-      "physical": ["身高体重正常", "运动协调性"]
+    "daughter_1": {
+      "academic": ["英语阅读达到六年级水平", "完成演讲稿独立创作"],
+      "social": ["主动分享观点", "组织班级活动"],
+      "physical": ["保持运动习惯", "身高增长在健康区间内"]
     },
-    "二女儿": {
-      "academic": ["拼音学习", "简单数数", "色彩认知"],
-      "social": ["克服内向", "表达能力"],
-      "physical": ["过敏控制", "体质增强"]
-    },
-    "儿子": {
-      "development": ["语言发展", "运动技能", "社交启蒙"],
-      "health": ["疫苗接种", "营养摄入", "睡眠规律"]
+    "son": {
+      "development": ["表达完整句子", "主动与同伴合作完成任务"],
+      "health": ["春季不过敏", "睡眠稳定 10 小时"],
+      "emotion": ["愿意表达情绪", "愿意尝试新活动"]
     }
   },
-  
   "family_goals": {
-    "short_term": [
-      "建立更好的作息规律",
-      "优化营养搭配", 
-      "增加亲子互动时间"
-    ],
-    "long_term": [
-      "孩子们健康成长",
-      "教育投资规划",
-      "家庭财务稳定",
-      "创造更多美好回忆"
-    ]
+    "short_term": ["打造固定亲子阅读时间", "完善健康餐计划", "每月至少一次家庭出游"],
+    "long_term": ["孩子们身心健康成长", "提前储备教育基金", "保持家庭温暖沟通文化"]
   },
-
   "ai_playbook": [
     {
-      "scenario": "孩子请假",
-      "checklist": ["确认原因", "通知老师", "安排补课或复习"],
-      "preferred_tone": "先安抚孩子，再说明安排",
-      "related_members": ["daughter_1", "daughter_2"]
-    },
-    {
-      "scenario": "预算超支",
-      "action": "生成本月支出对比，并建议三项可裁减费用",
+      "scenario": "家庭预算超支",
+      "action": "生成本月超出项对比表，并建议三条节省措施",
       "notify": ["dad", "mom"],
-      "data_sources": ["memories:expense", "budget.monthly_categories"]
+      "data_sources": ["memories:expense", "budget.monthly_categories"],
+      "preferred_tone": "客观、可执行"
     },
     {
-      "scenario": "节假日提醒",
-      "action": "提前 7 天生成活动建议和采购清单",
-      "preferred_output": "表格 + 提醒事项",
-      "target": "household"
+      "scenario": "孩子缺课或请假",
+      "checklist": ["确认原因", "通知老师", "安排补课或复习计划"],
+      "related_members": ["daughter_1", "son"],
+      "preferred_tone": "先共情后行动"
+    },
+    {
+      "scenario": "节假日前 7 天",
+      "action": "生成节日活动建议、采购清单、提醒家人任务",
+      "target": "household",
+      "preferred_output": "清单 + 提示语"
     }
   ],
-  
   "metadata": {
-    "data_sensitivity": "此文件包含隐私信息，不应提交至版本控制",
-    "last_updated": "2024-08-01",
-    "update_frequency": "根据家庭变化定期更新",
-    "ai_usage": "AI助手可据此提供个性化建议、提醒与计划"
+    "data_sensitivity": "包含示例隐私字段，请在私有文件中替换为真实信息并勿提交版本库",
+    "last_updated": "2024-09-24",
+    "update_frequency": "家庭结构或偏好发生变化时更新",
+    "ai_usage": "阿福会据此识别成员身份、账号映射、生活偏好与自动化策略"
   }
 }

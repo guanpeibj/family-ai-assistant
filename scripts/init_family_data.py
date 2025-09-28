@@ -157,8 +157,9 @@ async def ensure_household(session, family_data: Dict[str, Any]) -> FamilyHouseh
 
 
 async def ensure_user_channel(session, channel: ChannelType, channel_user_id: str, channel_data: Dict[str, Any], is_primary: Optional[bool]) -> uuid.UUID:
+    channel_value = channel.value if isinstance(channel, ChannelType) else str(channel).lower()
     stmt = select(UserChannel).where(
-        UserChannel.channel == channel,
+        UserChannel.channel == channel_value,
         UserChannel.channel_user_id == channel_user_id,
     )
     existing = (await session.execute(stmt)).scalar_one_or_none()
@@ -175,7 +176,7 @@ async def ensure_user_channel(session, channel: ChannelType, channel_user_id: st
     session.add(
         UserChannel(
             user_id=user.id,
-            channel=channel,
+            channel=channel_value,
             channel_user_id=channel_user_id,
             channel_data=channel_data or {},
             is_primary=bool(is_primary),
@@ -284,13 +285,15 @@ async def sync_member_accounts(
         is_primary = entry.get('is_primary')
         labels = entry.get('labels') if isinstance(entry.get('labels'), dict) else None
 
-        user_id_value = entry.get('user_id')
+        user_id_value = entry.get('user_id') or profile.get('user_id')
         user_uuid: Optional[uuid.UUID] = None
         if user_id_value:
             try:
                 user_uuid = uuid.UUID(str(user_id_value))
             except ValueError:
-                user_uuid = None
+                user_uuid = uuid.uuid5(uuid.NAMESPACE_URL, f"faa:{user_id_value}")
+                labels = labels or {}
+                labels.setdefault('alias', str(user_id_value))
 
         if user_uuid is None:
             user_uuid = await ensure_user_channel(session, channel_type, channel_user_id, channel_data, is_primary)

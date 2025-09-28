@@ -226,19 +226,46 @@ class PromptManager:
         return base
 
     def get_system_prompt(self, profile: Optional[str] = None) -> str:
+        """获取系统提示词
+        
+        现在支持动态版本选择，可以根据 A/B 测试返回不同的 Prompt 版本。
+        如果指定了版本（如 v4_experimental），会尝试使用该版本。
+        """
+        # 检查是否指定了特定版本
+        if profile and profile in self.prompts:
+            # 直接使用指定的版本
+            components = self.prompts[profile].get('components', {})
+            return components.get('system', '')
+        
+        # 使用原有逻辑
         components = self._components_for_profile(profile)
         fallback = self.prompts.get('v1_basic', {}).get('components', {}).get('system', '')
         return components.get('system') or fallback
 
     def get_understanding_prompt(self, profile: Optional[str] = None) -> str:
+        """获取理解分析提示词（支持版本选择）"""
+        if profile and profile in self.prompts:
+            components = self.prompts[profile].get('components', {})
+            return components.get('understanding', '')
+        
         components = self._components_for_profile(profile)
         return components.get('understanding', '')
 
     def get_response_prompt(self, profile: Optional[str] = None) -> str:
+        """获取响应生成提示词（支持版本选择）"""
+        if profile and profile in self.prompts:
+            components = self.prompts[profile].get('components', {})
+            return components.get('response_generation', '')
+        
         components = self._components_for_profile(profile)
         return components.get('response_generation', '')
 
     def get_response_clarification_prompt(self, profile: Optional[str] = None) -> str:
+        """获取澄清回复提示词（支持版本选择）"""
+        if profile and profile in self.prompts:
+            components = self.prompts[profile].get('components', {})
+            return components.get('response_clarification', '')
+        
         components = self._components_for_profile(profile)
         return components.get('response_clarification', '')
 
@@ -247,10 +274,20 @@ class PromptManager:
         return components.get('response_normal', '')
 
     def get_tool_planning_prompt(self, profile: Optional[str] = None) -> str:
+        """获取工具规划提示词（支持版本选择）"""
+        if profile and profile in self.prompts:
+            components = self.prompts[profile].get('components', {})
+            return components.get('tool_planning', '')
+        
         components = self._components_for_profile(profile)
         return components.get('tool_planning', '')
 
     def get_ack_prompt(self, profile: Optional[str] = None) -> str:
+        """获取确认回复提示词（支持版本选择）"""
+        if profile and profile in self.prompts:
+            components = self.prompts[profile].get('components', {})
+            return components.get('response_ack', '')
+        
         components = self._components_for_profile(profile)
         return components.get('response_ack', '')
 

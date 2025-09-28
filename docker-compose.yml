@@ -55,6 +55,7 @@ services:
         condition: service_started
     volumes:
       - ./src:/app/src
+      - ./scripts:/app/scripts
       - ./prompts:/app/prompts
       - media_data:/data/media
       - fastembed_cache:/data/fastembed_cache

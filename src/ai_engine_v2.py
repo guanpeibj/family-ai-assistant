@@ -1,4 +1,5 @@
 """
+AI引擎V2 - 智能增强版
 
 设计理念：
 1. AI 完全主导业务逻辑，工程层只提供基础设施
@@ -6,8 +7,18 @@
 3. 数据结构开放，AI 可以自由决定存储内容
 4. 工具调用完全通用化，不含业务逻辑
 
-核心流程：
-用户输入 → 统一AI理解（含上下文） → 工具计划 → 执行 → 回复
+增强特性（V2）：
+1. 智能Context管理 - 主动获取多维度相关信息
+2. 思考循环支持 - 最多3轮深度分析，逐步深化理解
+3. 工具反馈优化 - 执行后验证结果，必要时自动补充
+
+核心流程（增强版）：
+用户输入 → 
+[思考循环] 统一AI理解（含智能上下文） → 
+[验证循环] 工具计划 → 执行 → 验证 → 
+回复生成
+
+参考文档： docs/V2_INTELLIGENCE_UPGRADE.md
 """
 import json
 import re  # 用于占位符解析
@@ -51,12 +62,14 @@ class ToolStepModel(BaseModel):
     args: Dict[str, Any] = Field(default_factory=dict)  # 工具参数
 
 class ToolPlanModel(BaseModel):
-    """工具执行计划模型"""
+    """工具执行计划模型（增强版）"""
     requires_context: List[str] = Field(default_factory=list)  # 需要的上下文依赖
     steps: List[ToolStepModel] = Field(default_factory=list)  # 执行步骤列表
+    # 工具结果验证相关
+    verification: Optional[Dict[str, Any]] = None  # 验证配置
 
 class UnderstandingModel(BaseModel):
-    """AI 理解结果模型 - 核心契约结构"""
+    """AI 理解结果模型 - 核心契约结构（增强版）"""
     intent: Optional[str] = None  # 识别的用户意图
     entities: Dict[str, Any] = Field(default_factory=dict)  # 提取的实体信息
     need_action: bool = False  # 是否需要执行操作
@@ -67,6 +80,11 @@ class UnderstandingModel(BaseModel):
     context_link: Optional[Dict[str, Any]] = None  # 上下文关联（如作用范围）
     occurred_at: Optional[str] = None  # 事件发生时间
     update_existing: Optional[bool] = None  # 是否更新已有记录
+    # 思考循环相关字段
+    thinking_depth: int = 0  # 思考深度（0-3）
+    needs_deeper_analysis: bool = False  # 是否需要更深入分析
+    analysis_reasoning: Optional[str] = None  # 分析推理过程
+    next_exploration_areas: List[str] = Field(default_factory=list)  # 下一步探索方向
     metadata: Dict[str, Any] = Field(default_factory=dict)  # 其他元数据
 
 class AnalysisModel(BaseModel):
@@ -321,11 +339,8 @@ class ContextManager:
 class ToolExecutor:
     """工具执行器 - 负责 MCP 工具调用和结果处理"""
     
-    def __init__(self, http_client_getter, mcp_url_getter, embedding_cache_getter):
-        # 避免循环引用，通过函数获取需要的资源
-        self._get_http_client = http_client_getter
-        self._get_mcp_url = mcp_url_getter
-        self._get_embedding_cached = embedding_cache_getter
+    def __init__(self, ai_engine):
+        self.ai_engine = ai_engine
         self.capability_analyzer = ToolCapabilityAnalyzer()
         self.argument_processor = ToolArgumentProcessor()
         self.execution_monitor = ToolExecutionMonitor()
@@ -374,13 +389,13 @@ class ToolExecutor:
                     last_aggregate_result=last_aggregate_result
                 )
                 
-                # 执行工具（直接调用 HTTP 接口）
+                # 执行工具
                 start_time = time.perf_counter()
                 try:
-                    result = await self._call_mcp_tool_direct(
+                    result = await self.ai_engine._call_mcp_tool(
                         tool_name, 
-                        processed_args,
-                        trace_id=trace_id
+                        trace_id=trace_id, 
+                        **processed_args
                     )
                     
                     duration_ms = int((time.perf_counter() - start_time) * 1000)
@@ -472,31 +487,28 @@ class ToolExecutor:
                     args['user_id'] = user_ids
         
         # 自动添加 user_id（如果工具需要）
-        http_client = self._get_http_client()
-        mcp_url = self._get_mcp_url()
-        
         if await self.capability_analyzer.requires_user_id(
-            tool_name, http_client, mcp_url
+            tool_name, self.ai_engine._http_client, self.ai_engine.mcp_url
         ) and 'user_id' not in args:
             args['user_id'] = await self._resolve_user_id(user_id, context)
         
         # 自动添加向量嵌入（如果工具支持）
         if await self.capability_analyzer.supports_embedding(
-            tool_name, http_client, mcp_url
+            tool_name, self.ai_engine._http_client, self.ai_engine.mcp_url
         ):
             if 'content' in args and 'embedding' not in args:
                 text_for_embed = args.get('content') or understanding.get('original_content', '')
                 if text_for_embed:
-                    args['embedding'] = await self._get_embedding_cached(text_for_embed, trace_id)
+                    args['embedding'] = await self.ai_engine._get_embedding_cached(text_for_embed, trace_id)
             
             if 'query' in args and 'query_embedding' not in args:
                 query_text = args.get('query')
                 if query_text:
-                    args['query_embedding'] = await self._get_embedding_cached(query_text, trace_id)
+                    args['query_embedding'] = await self.ai_engine._get_embedding_cached(query_text, trace_id)
         
         # 合并实体信息到 ai_data（存储类工具）
         output_type = await self.capability_analyzer.get_output_type(
-            tool_name, http_client, mcp_url
+            tool_name, self.ai_engine._http_client, self.ai_engine.mcp_url
         )
         if output_type == 'entity_with_id' and 'ai_data' in args:
             ai_data = args.get('ai_data', {})
@@ -538,35 +550,9 @@ class ToolExecutor:
     
     async def is_simple_operation(self, steps: List[Dict[str, Any]]) -> bool:
         """判断是否为简单操作"""
-        http_client = self._get_http_client()
-        mcp_url = self._get_mcp_url()
         return await self.capability_analyzer.is_simple_operation(
-            steps, http_client, mcp_url
+            steps, self.ai_engine._http_client, self.ai_engine.mcp_url
         )
-    
-    async def _call_mcp_tool_direct(self, tool_name: str, args: Dict[str, Any], trace_id: str) -> Dict[str, Any]:
-        """直接调用 MCP 工具（简化版本）"""
-        http_client = self._get_http_client()
-        mcp_url = self._get_mcp_url()
-        
-        if http_client is None:
-            raise ToolExecutionError(f"HTTP 客户端未初始化", trace_id=trace_id)
-        
-        try:
-            response = await http_client.post(
-                f"{mcp_url}/tool/{tool_name}",
-                json=args,
-                timeout=10.0
-            )
-            response.raise_for_status()
-            return response.json()
-            
-        except Exception as e:
-            raise ToolExecutionError(
-                f"工具 {tool_name} 调用失败: {str(e)}",
-                trace_id=trace_id,
-                context={"tool_name": tool_name}
-            )
 
 
 class AIEngineV2:
@@ -587,6 +573,11 @@ class AIEngineV2:
         # HTTP 客户端（复用连接）
         self._http_client: Optional[httpx.AsyncClient] = None
         
+        # 辅助组件
+        self.message_processor = MessageProcessor()
+        self.context_manager = ContextManager(self)
+        self.tool_executor = ToolExecutor(self)
+        
         # 向量嵌入缓存（两级缓存优化性能）
         self._emb_cache_by_trace: Dict[str, Dict[str, List[float]]] = {}
         self._emb_cache_global: Dict[str, Tuple[List[float], float]] = {}
@@ -595,21 +586,14 @@ class AIEngineV2:
         
         # 工具调用记录（按 trace_id 聚合）
         self._tool_calls_by_trace: Dict[str, List[Dict[str, Any]]] = {}
-        
-        # 辅助组件（通过 lambda 避免循环引用）
-        self.message_processor = MessageProcessor()
-        self.context_manager = ContextManager(self)
-        self.tool_executor = ToolExecutor(
-            http_client_getter=lambda: self._http_client,
-            mcp_url_getter=lambda: self.mcp_url,
-            embedding_cache_getter=lambda text, trace_id: self._get_embedding_cached(text, trace_id)
-        )
     
     # =================== 主入口方法 ===================
     
     async def process_message(self, content: str, user_id: str, context: Dict[str, Any] = None) -> str:
         """处理用户消息的主入口 - 简洁的统一流程
-        包括 清晰的步骤，每个步骤都有专门的方法处理。
+        
+        这是重构后的核心方法，将原来150+行的复杂逻辑拆分为
+        清晰的步骤，每个步骤都有专门的方法处理。
         
         Args:
             content: 用户输入的消息内容
@@ -691,67 +675,129 @@ class AIEngineV2:
         trace_id: str,
         prompt_version: str
     ) -> AnalysisModel:
-        """AI 理解分析：统一的分析入口"""
+        """AI 理解分析：支持多轮思考循环的统一分析入口
+        
+        增强功能：
+        - 支持思考深度（thinking_depth）判断
+        - 支持基于初步结果的深度分析循环
+        - 最多进行3轮思考，逐步深化理解
+        """
         try:
             thread_id = (context or {}).get('thread_id') if context else None
             channel = (context or {}).get('channel') if context else None
             shared_thread = bool((context or {}).get('shared_thread'))
             
-            # 获取基础上下文
-            base_context = await self.context_manager.get_basic_context(
-                user_id=user_id,
-                thread_id=thread_id,
-                shared_thread=shared_thread,
-                channel=channel
-            )
+            # 初始化累积的上下文数据
+            accumulated_context = {}
+            analysis = None
+            thinking_rounds = 0
+            max_thinking_rounds = 3
             
-            # 构建分析请求
-            analysis_payload = {
-                "message": content,
-                "user": {"id": user_id, "thread_id": thread_id, "channel": channel},
-                "context": {
-                    "shared_thread": shared_thread,
-                    "light_context": base_context.get('light_context', []),
-                    "household": base_context.get('household', {}),
-                    "metadata": {
-                        "utc_now": datetime.utcnow().isoformat(),
-                        "low_budget": self._is_low_budget_mode(),
+            # 思考循环：最多3轮
+            while thinking_rounds < max_thinking_rounds:
+                thinking_rounds += 1
+                
+                # 获取基础上下文（第一轮）或使用累积的上下文
+                if thinking_rounds == 1:
+                    base_context = await self.context_manager.get_basic_context(
+                        user_id=user_id,
+                        thread_id=thread_id,
+                        shared_thread=shared_thread,
+                        channel=channel
+                    )
+                    accumulated_context = base_context.copy()
+                
+                # 构建分析请求（包含累积的上下文）
+                analysis_payload = {
+                    "message": content,
+                    "user": {"id": user_id, "thread_id": thread_id, "channel": channel},
+                    "context": {
+                        "shared_thread": shared_thread,
+                        "light_context": accumulated_context.get('light_context', []),
+                        "household": accumulated_context.get('household', {}),
+                        "accumulated_insights": accumulated_context.get('insights', {}),
+                        "thinking_round": thinking_rounds,
+                        "metadata": {
+                            "utc_now": datetime.utcnow().isoformat(),
+                            "low_budget": self._is_low_budget_mode(),
+                        }
                     }
                 }
-            }
+                
+                # 调用 LLM 进行分析
+                system_prompt = await prompt_manager.get_system_prompt_with_tools(prompt_version)
+                understanding_prompt = prompt_manager.get_understanding_prompt(prompt_version)
+                
+                user_prompt = "\n\n".join([
+                    understanding_prompt,
+                    "输入：",
+                    json.dumps(analysis_payload, ensure_ascii=False, default=str),
+                    "请仅返回契约描述的 JSON，不要添加解释。"
+                ])
+                
+                raw_response = await self.llm.chat_json(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=0.2,
+                    max_tokens=1500,  # 增加token限制以支持更深入的分析
+                )
+                
+                # 解析响应
+                try:
+                    analysis = AnalysisModel(**raw_response)
+                    analysis.understanding.original_content = content
+                    
+                    # 检查是否需要更深入的分析
+                    needs_deeper = raw_response.get('understanding', {}).get('needs_deeper_analysis', False)
+                    
+                    if not needs_deeper or thinking_rounds >= max_thinking_rounds:
+                        # 不需要继续或已达到最大轮数
+                        logger.info(
+                            "thinking_loop.completed", 
+                            trace_id=trace_id,
+                            rounds=thinking_rounds,
+                            thinking_depth=raw_response.get('understanding', {}).get('thinking_depth', 0)
+                        )
+                        break
+                    
+                    # 需要更深入分析，先获取额外上下文
+                    if analysis.context_requests:
+                        logger.info(
+                            "thinking_loop.fetching_context",
+                            trace_id=trace_id,
+                            round=thinking_rounds,
+                            requests_count=len(analysis.context_requests)
+                        )
+                        
+                        resolved_context = await self.context_manager.resolve_context_requests(
+                            context_requests=[req.model_dump() for req in analysis.context_requests],
+                            understanding=analysis.understanding.model_dump(),
+                            user_id=user_id,
+                            thread_id=thread_id,
+                            shared_thread=shared_thread,
+                            channel=channel,
+                            trace_id=trace_id
+                        )
+                        
+                        # 更新累积的上下文
+                        accumulated_context.update(resolved_context)
+                        accumulated_context['insights'] = {
+                            'round': thinking_rounds,
+                            'previous_analysis': analysis.understanding.model_dump(),
+                            'exploration_areas': raw_response.get('understanding', {}).get('next_exploration_areas', [])
+                        }
+                    
+                except ValidationError:
+                    # 回退处理
+                    return self._create_fallback_analysis(content, raw_response)
             
-            # 调用 LLM 进行分析
-            system_prompt = await prompt_manager.get_system_prompt_with_tools(prompt_version)
-            understanding_prompt = prompt_manager.get_understanding_prompt(prompt_version)
-            
-            user_prompt = "\n\n".join([
-                understanding_prompt,
-                "输入：",
-                json.dumps(analysis_payload, ensure_ascii=False, default=str),
-                "请仅返回契约描述的 JSON，不要添加解释。"
-            ])
-            
-            raw_response = await self.llm.chat_json(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                temperature=0.2,
-                max_tokens=1200,
-            )
-            
-            # 解析响应
-            try:
-                analysis = AnalysisModel(**raw_response)
-                analysis.understanding.original_content = content
-                return analysis
-            except ValidationError:
-                # 回退处理
-                return self._create_fallback_analysis(content, raw_response)
+            return analysis
             
         except Exception as e:
             raise AnalysisError(
                 f"消息理解分析失败: {str(e)}",
                 trace_id=trace_id,
-                context={"content_length": len(content)},
+                context={"content_length": len(content), "thinking_rounds": thinking_rounds},
                 cause=e
             )
     
@@ -803,7 +849,13 @@ class AIEngineV2:
         trace_id: str,
         prompt_version: str
     ) -> str:
-        """执行工具并生成响应"""
+        """执行工具并生成响应（支持结果验证和反馈优化）
+        
+        增强功能：
+        - 工具执行后验证结果完整性
+        - 必要时执行补充查询
+        - 最多3轮迭代优化
+        """
         try:
             thread_id = (context or {}).get('thread_id') if context else None
             channel = (context or {}).get('channel') if context else None
@@ -837,15 +889,88 @@ class AIEngineV2:
                 prompt_version=prompt_version
             )
             
-            # 执行工具
-            execution_result = await self.tool_executor.execute_tool_plan(
-                steps=tool_plan.get('steps', []),
-                understanding=analysis.understanding.model_dump(),
-                user_id=user_id,
-                context=context,
-                trace_id=trace_id,
-                context_data=context_payload
-            )
+            # 工具执行和验证循环（最多3轮）
+            execution_rounds = 0
+            max_execution_rounds = 3
+            accumulated_results = {'actions_taken': []}
+            
+            while execution_rounds < max_execution_rounds:
+                execution_rounds += 1
+                
+                # 执行工具
+                round_result = await self.tool_executor.execute_tool_plan(
+                    steps=tool_plan.get('steps', []),
+                    understanding=analysis.understanding.model_dump(),
+                    user_id=user_id,
+                    context=context,
+                    trace_id=trace_id,
+                    context_data=context_payload
+                )
+                
+                # 累积结果
+                accumulated_results['actions_taken'].extend(
+                    round_result.get('actions_taken', [])
+                )
+                
+                # 获取验证配置
+                verification_config = tool_plan.get('verification') or analysis.tool_plan.verification
+                
+                if not verification_config or not verification_config.get('check_completeness'):
+                    # 不需要验证，直接结束
+                    logger.info(
+                        "tool_execution.completed_without_verification",
+                        trace_id=trace_id,
+                        round=execution_rounds
+                    )
+                    break
+                
+                # 验证结果完整性
+                needs_supplement = await self._verify_execution_results(
+                    results=accumulated_results,
+                    verification_config=verification_config,
+                    understanding=analysis.understanding.model_dump(),
+                    trace_id=trace_id
+                )
+                
+                if not needs_supplement:
+                    # 结果满意，结束循环
+                    logger.info(
+                        "tool_execution.verified_complete",
+                        trace_id=trace_id,
+                        rounds=execution_rounds
+                    )
+                    break
+                
+                if execution_rounds >= max_execution_rounds:
+                    # 达到最大轮数，停止
+                    logger.warning(
+                        "tool_execution.max_rounds_reached",
+                        trace_id=trace_id,
+                        rounds=execution_rounds
+                    )
+                    break
+                
+                # 需要补充查询，构建补充计划
+                fallback_strategy = verification_config.get('fallback_strategy', 'expand_search')
+                
+                logger.info(
+                    "tool_execution.supplementing",
+                    trace_id=trace_id,
+                    round=execution_rounds,
+                    strategy=fallback_strategy
+                )
+                
+                # 基于策略调整工具计划
+                tool_plan = await self._adjust_tool_plan(
+                    original_plan=tool_plan,
+                    strategy=fallback_strategy,
+                    previous_results=accumulated_results,
+                    understanding=analysis.understanding.model_dump(),
+                    prompt_version=prompt_version
+                )
+            
+            # 使用累积的结果生成响应
+            execution_result = accumulated_results
             
             # 生成响应
             is_simple = await self.tool_executor.is_simple_operation(tool_plan.get('steps', []))
@@ -893,12 +1018,120 @@ class AIEngineV2:
                 need_clarification=bool(understanding.get('need_clarification')),
                 missing_fields=understanding.get('missing_fields', []),
                 clarification_questions=understanding.get('clarification_questions', []),
+                thinking_depth=understanding.get('thinking_depth', 0),
+                needs_deeper_analysis=bool(understanding.get('needs_deeper_analysis')),
+                analysis_reasoning=understanding.get('analysis_reasoning'),
+                next_exploration_areas=understanding.get('next_exploration_areas', []),
                 original_content=content
             ),
             context_requests=[],
-            tool_plan=ToolPlanModel(steps=[]),
+            tool_plan=ToolPlanModel(
+                steps=[],
+                verification=understanding.get('verification')
+            ),
             response_directives=raw_response.get('response_directives', {})
         )
+    
+    async def _verify_execution_results(
+        self,
+        results: Dict[str, Any],
+        verification_config: Dict[str, Any],
+        understanding: Dict[str, Any],
+        trace_id: str
+    ) -> bool:
+        """验证工具执行结果的完整性
+        
+        返回 True 表示需要补充查询，False 表示结果满意
+        """
+        try:
+            # 检查最小结果数量
+            min_expected = verification_config.get('min_results_expected')
+            if min_expected:
+                actual_count = sum(
+                    1 for action in results.get('actions_taken', [])
+                    if action.get('result', {}).get('success')
+                )
+                if actual_count < min_expected:
+                    logger.info(
+                        "verification.insufficient_results",
+                        trace_id=trace_id,
+                        expected=min_expected,
+                        actual=actual_count
+                    )
+                    return True  # 需要补充
+            
+            # 检查是否有失败的操作
+            failed_actions = [
+                action for action in results.get('actions_taken', [])
+                if not action.get('result', {}).get('success')
+            ]
+            
+            if failed_actions and verification_config.get('retry_on_failure'):
+                logger.info(
+                    "verification.has_failures",
+                    trace_id=trace_id,
+                    failed_count=len(failed_actions)
+                )
+                return True  # 需要重试
+            
+            # 基于理解深度判断
+            thinking_depth = understanding.get('thinking_depth', 0)
+            if thinking_depth >= 2:  # 复杂问题
+                # 检查是否有足够的数据支持分析
+                total_results = len(results.get('actions_taken', []))
+                if total_results < 2:  # 复杂问题至少需要2个数据源
+                    return True
+            
+            return False  # 结果满意
+            
+        except Exception as e:
+            logger.warning(
+                "verification.failed",
+                trace_id=trace_id,
+                error=str(e)
+            )
+            return False  # 验证失败，不再补充
+    
+    async def _adjust_tool_plan(
+        self,
+        original_plan: Dict[str, Any],
+        strategy: str,
+        previous_results: Dict[str, Any],
+        understanding: Dict[str, Any],
+        prompt_version: str
+    ) -> Dict[str, Any]:
+        """基于策略调整工具执行计划"""
+        try:
+            if strategy == 'expand_search':
+                # 扩大搜索范围
+                adjusted_steps = []
+                for step in original_plan.get('steps', []):
+                    step_copy = step.copy()
+                    if step_copy.get('tool') == 'search':
+                        # 增加搜索限制
+                        args = step_copy.get('args', {})
+                        current_limit = args.get('filters', {}).get('limit', 10)
+                        args.setdefault('filters', {})['limit'] = min(current_limit * 2, 50)
+                        step_copy['args'] = args
+                    adjusted_steps.append(step_copy)
+                
+                return {'steps': adjusted_steps, 'verification': original_plan.get('verification')}
+            
+            elif strategy == 'try_different_approach':
+                # 尝试不同的方法（例如从精确搜索改为语义搜索）
+                # 这里需要根据具体情况调整，暂时返回原计划
+                return original_plan
+            
+            else:
+                # 默认策略：返回原计划
+                return original_plan
+                
+        except Exception as e:
+            logger.warning(
+                "adjust_plan.failed",
+                error=str(e)
+            )
+            return original_plan
     
     async def _build_complete_tool_plan(
         self,
@@ -1140,32 +1373,11 @@ class AIEngineV2:
     # =================== MCP 工具调用 ===================
     
     async def _call_mcp_tool(self, tool_name: str, **kwargs) -> Dict[str, Any]:
-        """调用 MCP 工具 - AI 引擎与工具层的桥接
-        
-        设计原则：
-        1. 工具完全通用化，不含业务逻辑
-        2. AI 决定如何使用工具，工程层只负责调用
-        3. 支持超时控制、重试机制、结果缓存
-        
-        Args:
-            tool_name: 工具名称（如 store/search/aggregate）
-            **kwargs: 工具参数（由 AI 决定的参数内容）
-            
-        Returns:
-            工具执行结果（原始数据，由 AI 解释使用）
-        """
+        """调用 MCP 工具 - 简化版本"""
         trace_id = kwargs.get('trace_id')
         
         if self._http_client is None:
             self._http_client = httpx.AsyncClient()
-        
-        # 记录调用开始
-        start_time = time.perf_counter()
-        logger.info(
-            "mcp.tool.call.start",
-            trace_id=trace_id,
-            tool=tool_name
-        )
         
         try:
             timeout = 10.0  # 统一超时时间
@@ -1177,42 +1389,23 @@ class AIEngineV2:
             response.raise_for_status()
             result = response.json()
             
-            # 记录成功调用
-            duration_ms = int((time.perf_counter() - start_time) * 1000)
-            logger.info(
-                "mcp.tool.call.success",
-                trace_id=trace_id,
-                tool=tool_name,
-                duration_ms=duration_ms
-            )
-            
+            # 记录调用
             if trace_id:
                 self._tool_calls_by_trace.setdefault(trace_id, []).append({
                     'tool': tool_name,
                     'success': True,
-                    'duration_ms': duration_ms,
                     'timestamp': time.time()
                 })
             
             return result
             
         except Exception as e:
-            # 记录失败调用
-            duration_ms = int((time.perf_counter() - start_time) * 1000)
-            logger.error(
-                "mcp.tool.call.failed",
-                trace_id=trace_id,
-                tool=tool_name,
-                duration_ms=duration_ms,
-                error=str(e)
-            )
-            
+            # 记录失败
             if trace_id:
                 self._tool_calls_by_trace.setdefault(trace_id, []).append({
                     'tool': tool_name,
                     'success': False,
                     'error': str(e),
-                    'duration_ms': duration_ms,
                     'timestamp': time.time()
                 })
             
@@ -1223,77 +1416,8 @@ class AIEngineV2:
                 cause=e
             )
     
-    async def _get_embedding_cached(self, text: str, trace_id: Optional[str]) -> Optional[List[float]]:
-        """获取缓存的向量嵌入"""
-        if not text:
-            return None
-        
-        # 检查 trace 级缓存
-        trace_cache = self._emb_cache_by_trace.get(trace_id or '', {})
-        if text in trace_cache:
-            return trace_cache[text]
-        
-        # 检查全局缓存
-        vec = self._emb_global_get(text)
-        if vec is not None:
-            trace_cache[text] = vec
-            if trace_id:
-                self._emb_cache_by_trace[trace_id] = trace_cache
-            return vec
-        
-        # 生成新向量
-        try:
-            embs = await self.llm.embed([text])
-            vec = [float(x) for x in (embs[0] or [])] if embs else None
-        except Exception:
-            vec = None
-        
-        if vec is not None:
-            # 更新缓存
-            trace_cache[text] = vec
-            if trace_id:
-                self._emb_cache_by_trace[trace_id] = trace_cache
-            
-            # 更新全局缓存
-            self._emb_global_put(text, vec)
-        
-        return vec
-    
     # =================== 向量嵌入缓存 ===================
     
-    def _emb_global_get(self, key: str) -> Optional[List[float]]:
-        """从全局缓存获取向量"""
-        item = self._emb_cache_global.get(key)
-        if not item:
-            return None
-        vec, ts = item
-        if (time.time() - ts) > self._emb_cache_global_ttl:
-            try:
-                self._emb_cache_global.pop(key, None)
-            except Exception:
-                pass
-            return None
-        return vec
-
-    def _emb_global_put(self, key: str, vec: Optional[List[float]]) -> None:
-        """向全局缓存存储向量"""
-        if not vec:
-            return
-        # 容量控制（LRU 淘汰）
-        try:
-            if len(self._emb_cache_global) >= self._emb_cache_global_max_items:
-                # 找到最旧的项并移除
-                oldest_key = None
-                oldest_ts = float('inf')
-                for k, (_, ts) in self._emb_cache_global.items():
-                    if ts < oldest_ts:
-                        oldest_key, oldest_ts = k, ts
-                if oldest_key:
-                    self._emb_cache_global.pop(oldest_key, None)
-        except Exception:
-            pass
-        self._emb_cache_global[key] = (vec, time.time())
-    
     async def _get_embedding_cached(self, text: str, trace_id: Optional[str]) -> Optional[List[float]]:
         """获取缓存的向量嵌入"""
         if not text:
@@ -1305,12 +1429,14 @@ class AIEngineV2:
             return trace_cache[text]
         
         # 检查全局缓存
-        vec = self._emb_global_get(text)
-        if vec is not None:
-            trace_cache[text] = vec
-            if trace_id:
-                self._emb_cache_by_trace[trace_id] = trace_cache
-            return vec
+        global_item = self._emb_cache_global.get(text)
+        if global_item:
+            vec, ts = global_item
+            if (time.time() - ts) < self._emb_cache_global_ttl:
+                trace_cache[text] = vec
+                if trace_id:
+                    self._emb_cache_by_trace[trace_id] = trace_cache
+                return vec
         
         # 生成新向量
         try:
@@ -1325,8 +1451,8 @@ class AIEngineV2:
             if trace_id:
                 self._emb_cache_by_trace[trace_id] = trace_cache
             
-            # 更新全局缓存
-            self._emb_global_put(text, vec)
+            # 更新全局缓存（LRU）
+            self._update_global_embedding_cache(text, vec)
         
         return vec
     
@@ -1430,86 +1556,7 @@ class AIEngineV2:
                 await self._http_client.aclose()
         except Exception:
             pass
-    
-    # =================== 兼容性方法补充 ===================
-    
-    async def check_and_send_reminders(self, send_callback) -> List[Dict[str, Any]]:
-        """检查并发送到期的提醒 - 兼容原有接口"""
-        sent_reminders = []
-        
-        try:
-            # 从数据库获取所有活跃用户
-            from .db.database import get_session
-            async with get_session() as db:
-                from sqlalchemy import text
-                result = await db.execute(text(
-                    """
-                    SELECT DISTINCT u.id as user_id
-                    FROM users u
-                    JOIN user_channels uc ON u.id = uc.user_id
-                    WHERE uc.channel = 'threema'
-                    """
-                ))
-                user_rows = result.fetchall()
-                
-                for row in user_rows:
-                    user_id = str(row[0] if isinstance(row, (tuple, list)) else row['user_id'])
-                    
-                    # 获取该用户的待发送提醒
-                    reminders = await self._call_mcp_tool(
-                        'get_pending_reminders',
-                        user_id=user_id
-                    )
-                    
-                    for reminder in reminders:
-                        # 构建提醒消息
-                        reminder_content = reminder.get('content', '您设置的提醒')
-                        ai_understanding = reminder.get('ai_understanding', {})
-                        remind_detail = ai_understanding.get('remind_content', reminder_content)
-                        
-                        reminder_text = f"⏰ 提醒：{remind_detail}\n"
-                        if ai_understanding.get('repeat') == 'daily':
-                            reminder_text += "（每日提醒）"
-                        
-                        # 发送提醒
-                        success = await send_callback(user_id, reminder_text)
-                        
-                        if success:
-                            # 标记为已发送
-                            await self._call_mcp_tool(
-                                'mark_reminder_sent',
-                                reminder_id=reminder['reminder_id']
-                            )
-                            
-                            sent_reminders.append({
-                                'user_id': user_id,
-                                'reminder': reminder,
-                                'sent': True
-                            })
-                            
-                            logger.info(f"Sent reminder to user {user_id}: {remind_detail}")
-                        else:
-                            logger.error(f"Failed to send reminder {reminder['reminder_id']} to {user_id}")
-                            
-        except Exception as e:
-            logger.error(f"Error in reminder task: {e}")
-        
-        return sent_reminders
 
 
-def _looks_like_uuid(value: Optional[str]) -> bool:
-    """检查字符串是否为有效的 UUID 格式"""
-    if not value or not isinstance(value, str):
-        return False
-    try:
-        uuid.UUID(value)
-        return True
-    except Exception:
-        return False
-
-
-# 导出兼容性别名
-AIEngine = AIEngineV2
-
-# 创建全局实例（保持向后兼容）
-ai_engine = AIEngineV2()
+# 创建全局实例（兼容现有代码）
+ai_engine_v2 = AIEngineV2()
