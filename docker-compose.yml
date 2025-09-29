@@ -57,6 +57,7 @@ services:
       - ./src:/app/src
       - ./scripts:/app/scripts
       - ./prompts:/app/prompts
+      - ./alembic:/app/alembic
       - media_data:/data/media
       - fastembed_cache:/data/fastembed_cache
     command: sh -c "/app/.venv/bin/alembic upgrade head && /app/.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload"
@@ -78,6 +79,7 @@ services:
       - "9000:8000"  # MCP 服务端口
     volumes:
       - ./mcp-server:/app/mcp-server
+      - ./alembic:/app/alembic
       - media_data:/data/media
       - fastembed_cache:/data/fastembed_cache
     command: python mcp-server/mcp_http_wrapper.py

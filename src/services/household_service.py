@@ -151,7 +151,7 @@ class HouseholdService:
                 rows = await session.execute(
                     text(
                         "SELECT DISTINCT user_id FROM memories "
-                        "WHERE ai_understanding @> '{""family_scope"": true}'::jsonb"
+                        "WHERE ai_understanding @> '{\"family_scope\": true}'::jsonb"
                     )
                 )
                 implicit_user_ids = {str(row.user_id) for row in rows if row.user_id is not None}

@@ -1,5 +1,5 @@
-version: "4.0"
-current: "v4_default"
+version: "4.1"
+current: "v4_optimized"
 
 vars:
   timezone: "Asia/Shanghai"
@@ -282,6 +282,69 @@ blocks:
       }
     }
 
+  understanding_contract_optimized: |
+    ## 优化版输出契约（快速响应）
+    输出精简的 JSON（UTF-8），专注核心字段：
+    {
+      "understanding": {
+        "intent": string,
+        "entities": object,
+        "need_action": boolean,
+        "need_clarification": boolean,
+        "clarification_questions": string[],
+        "context_link": {"scope": string},
+        "occurred_at": string | null,
+        "thinking_depth": 0 | 1,  // 仅0或1级，避免深度思考
+        "needs_deeper_analysis": false  // 默认不需要深度分析
+      },
+      "context_requests": [],  // 尽量减少上下文请求
+      "tool_plan": {
+        "steps": [{"tool": string, "args": object}]
+      },
+      "response_directives": {
+        "profile": "compact"  // 默认简洁回复
+      }
+    }
+    原则：
+    - 优先直接理解，避免多轮思考
+    - 减少上下文请求，只在必要时获取
+    - 工具调用直接精准，避免探索性查询
+    - 快速决策，宁可后续补充也不要过度分析
+
+  context_strategy_simple: |
+    ## 简化上下文策略（快速版）
+    仅在以下情况请求额外上下文：
+    1. 用户明确要求历史对比或趋势分析
+    2. 需要跨时间段的数据聚合
+    3. 涉及多个家庭成员的对比
+    
+    默认策略：
+    - 简单记录：不需要上下文
+    - 简单查询：直接执行，不预先获取
+    - 统计汇总：使用聚合工具而非多次查询
+    
+    避免：
+    - 探索性的语义搜索
+    - 获取"可能相关"的信息
+    - 多维度交叉验证
+
+  planning_brief_optimized: |
+    ## 优化工具计划（快速执行）
+    工具使用原则：
+    1. **直接执行**：有明确指令就直接调用工具
+    2. **单次查询**：优先使用聚合工具而非多次查询
+    3. **精准参数**：使用精确过滤条件，避免模糊搜索
+    
+    优化策略：
+    - 记录类：直接 store，不预先检查
+    - 查询类：直接 search 或 aggregate，不预先探索
+    - 提醒类：直接 schedule_reminder，不验证
+    
+    避免：
+    - 多步验证流程
+    - 预先检查是否存在
+    - 获取额外的"以防万一"数据
+
 prompts:
   v4_default:
     name: "FAA 默认配置"
@@ -323,3 +386,22 @@ prompts:
           - clarification_voice_default
         response_ack_blocks:
           - ack_prompt
+  
+  v4_optimized:
+    name: "FAA 优化配置 - 快速响应版"
+    description: "优化响应速度，减少思考循环"
+    inherits: "v4_default"
+    understanding_blocks:
+      - understanding_contract_optimized
+      - context_strategy_simple
+      - planning_brief_optimized
+    response_blocks:
+      - response_contract
+      - response_voice_compact
+    tool_planning_blocks:
+      - planning_brief_optimized
+    profiles:
+      threema:
+        response_blocks:
+          - response_contract
+          - response_voice_compact

@@ -22,7 +22,7 @@ else:
 
 engine = create_async_engine(
     async_database_url,
-    echo=settings.DEBUG,
+    echo=False,  # 简化日志，避免打印大量SQL语句
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,
