@@ -182,7 +182,7 @@ class ContextManager:
                 "context.household.fetched",
                 duration_ms=int((asyncio.get_event_loop().time() - household_start) * 1000),
                 members=len(household_context.get('members', [])),
-                names=[m.get('name') for m in household_context.get('members', [])]
+                names=[m.get('display_name') for m in household_context.get('members', [])]
             )
             
             logger.info(
@@ -284,7 +284,14 @@ class ContextManager:
                 
                 elif kind == 'direct_search':
                     filters = req.get('filters', {})
-                    limit = int(req.get('limit', 20))
+                    limit = req.get('limit', 20)
+                    # 确保 limit 是有效的整数，防止 int(None) 错误
+                    if limit is None or limit == '':
+                        limit = 20
+                    try:
+                        limit = int(limit)
+                    except (ValueError, TypeError):
+                        limit = 20
                     filters['limit'] = limit
                     if thread_id and 'thread_id' not in filters:
                         filters['thread_id'] = thread_id
@@ -373,10 +380,12 @@ class ContextManager:
             for memory in recent_memories:
                 if isinstance(memory, dict) and not memory.get('_meta'):
                     aiu = memory.get('ai_understanding', {})
+                    # 处理时间字段：优先使用occurred_at，备选created_at
+                    time_value = memory.get('occurred_at') or memory.get('created_at')
                     formatted_memories.append({
                         'content': memory.get('content', ''),
                         'ai_understanding': aiu if isinstance(aiu, dict) else {},
-                        'time': memory.get('occurred_at', '')
+                        'time': time_value  # 现在会是时间戳或None（如果两个字段都为空）
                     })
             
             return formatted_memories
@@ -610,7 +619,7 @@ class ToolExecutor:
                 if query_text:
                     args['query_embedding'] = await self.ai_engine._get_embedding_cached(query_text, trace_id)
         
-        # 合并实体信息到 ai_data（存储类工具）
+        # 仅为存储类工具合并实体信息到 ai_data（保持AI自主决策）
         output_type = await self.capability_analyzer.get_output_type(
             tool_name, self.ai_engine._http_client, self.ai_engine.mcp_url
         )
@@ -875,10 +884,11 @@ class AIEngineV2:
                         light_context_count=len(accumulated_context.get('light_context', [])),
                         light_context_preview=[{
                             'content': ctx.get('content', '')[:50] + '...' if len(ctx.get('content', '')) > 50 else ctx.get('content', ''),
-                            'type': ctx.get('ai_data', {}).get('type') if isinstance(ctx.get('ai_data'), dict) else None
+                            'type': ctx.get('ai_understanding', {}).get('type') if isinstance(ctx.get('ai_understanding'), dict) else None,
+                            'time': ctx.get('time')  # 显示时间方便调试
                         } for ctx in accumulated_context.get('light_context', [])[:3]],  # 只显示前3条
                         household_members=len(accumulated_context.get('household', {}).get('members', [])),
-                        household_names=[m.get('name') for m in accumulated_context.get('household', {}).get('members', [])] if accumulated_context.get('household') else []
+                        household_names=[m.get('display_name') for m in accumulated_context.get('household', {}).get('members', [])] if accumulated_context.get('household') else []
                     )
                 
                 # 构建分析请求（包含累积的上下文）
@@ -1009,7 +1019,7 @@ class AIEngineV2:
                             trace_id=trace_id,
                             round=thinking_rounds,
                             requests_count=len(analysis.context_requests),
-                            request_types=[req.type for req in analysis.context_requests],
+                            request_types=[req.kind for req in analysis.context_requests],
                             exploration_areas=analysis.understanding.next_exploration_areas
                         )
                         
@@ -1303,12 +1313,29 @@ class AIEngineV2:
         返回 True 表示需要补充查询，False 表示结果满意
         """
         try:
+            # 验证输入参数类型（调试用）
+            if not isinstance(results, dict):
+                logger.warning(
+                    "verification.invalid_results_type",
+                    trace_id=trace_id,
+                    results_type=type(results).__name__,
+                    results_preview=str(results)[:100] if results else 'None'
+                )
+                return False  # 类型错误，跳过验证
+            
+            if not isinstance(verification_config, dict):
+                logger.debug(
+                    "verification.no_config",
+                    trace_id=trace_id,
+                    config_type=type(verification_config).__name__
+                )
+                return False  # 没有验证配置，跳过验证
             # 检查最小结果数量
             min_expected = verification_config.get('min_results_expected')
             if min_expected:
                 actual_count = sum(
                     1 for action in results.get('actions_taken', [])
-                    if action.get('result', {}).get('success')
+                    if isinstance(action, dict) and action.get('result', {}).get('success')
                 )
                 if actual_count < min_expected:
                     logger.info(
@@ -1322,7 +1349,7 @@ class AIEngineV2:
             # 检查是否有失败的操作
             failed_actions = [
                 action for action in results.get('actions_taken', [])
-                if not action.get('result', {}).get('success')
+                if isinstance(action, dict) and not action.get('result', {}).get('success')
             ]
             
             if failed_actions and verification_config.get('retry_on_failure'):

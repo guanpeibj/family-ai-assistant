@@ -1,58 +1,219 @@
 ---
 globs: src/ai_engine.py
-description: AI引擎统一驱动流程 - 让AI自主处理所有对话理解和关系识别
+description: AI引擎V2增强版工作流 - 智能思考循环与详细日志追踪
 ---
-## 重构后的统一流程
-**核心理念**: 工程简化、AI驱动、自动进化
+
+## 核心架构
+**版本**: AIEngineV2 增强版
+**理念**: AI驱动决策、工程提供框架、能力自动进化
 
 ```
-用户输入 → 统一AI理解（含上下文） → 工具计划 → 执行 → 回复
+用户输入 → 预处理 → [思考循环] AI分析 → 工具执行 → 响应生成 → 持久化
 ```
 
-### 主流程 `process_message`:
-1) **预处理**: 附件衍生文本合并
-2) **统一理解** `_understand_message`: AI自主处理所有对话复杂度
-   - 基础上下文（最近8轮对话，用于识别跟进关系）
-   - 智能深度搜索（仅复杂查询/统计时启用语义搜索）
-   - **AI完全自主**: 对话关系识别、信息合并、完整性判断
-3) **分支处理**: AI决定需要澄清 → 生成澄清回复并返回
-4) **工具执行**: `_build_tool_plan` → `_execute_tool_steps`
-5) **回复生成**: 简单确认 or 详细回复
-6) **持久化**: 对话回合存储 + 交互轨迹记录
+## 主流程 `process_message` (6步骤)
 
-## AI自主能力（重构核心）
-**删除的复杂工程逻辑**:
-- ❌ `_light_understand_message` (轻理解)
-- ❌ `_maybe_merge_followup` (跟进检测)
-- ❌ `_classify_followup` (跟进分类)
-- ❌ `_reduce_thread_state` (线程状态归纳)
+### 步骤1: 消息预处理 (`_preprocess_message`)
+- 合并附件衍生文本（OCR/STT/Vision）
+- 日志: `step1.preprocess.completed`
+- 耗时追踪: `duration_ms`
 
-**AI现在完全自主处理**:
-- ✅ 对话关系识别: "给二女儿的" → 识别为跟进回答
-- ✅ 信息合并: 自动合并跟进信息形成完整理解
-- ✅ 完整性判断: 自主决定是否需要澄清
-- ✅ 上下文感知: 智能利用历史对话理解当前意图
+### 步骤2: 实验版本选择 (`_get_experiment_version`)
+- 支持A/B测试不同Prompt版本
+- 当前默认: `v4_optimized`（快速响应）
+- 日志: `step2.experiment.version`
 
-## 性能优化策略
-- **智能上下文分层**: 
-  * 基础上下文（最近8轮）: 始终包含，用于对话关系识别
-  * 深度上下文（语义搜索）: 仅复杂查询时启用
-- **`_should_semantic_search`优化**: 简短跟进回答（≤20字）通常跳过语义搜索
-- **嵌入缓存**: trace级 + 全局LRU，成本优化
+### 步骤3: AI理解分析 (`_analyze_message`) 🧠核心
+**多轮思考循环（最多3轮）**：
 
-## 核心约束（不变）
-- 不在引擎中硬编码业务逻辑；一切依赖 Prompt 与 MCP 工具
-- 工具时间预算来自 MCP `/tools` 的 `x_time_budget`
-- 严格模式下MCP不可用时不模拟，但理解/计划正常进行
-- 共享线程支持跨用户检索（有上限保护）
+#### 第1轮 - 基础理解
+1. 获取基础上下文:
+   - 最近4条对话记录 (`light_context`)
+   - 家庭成员信息 (`household`)
+   - 日志: `analysis.basic_context.details`
 
-## 扩展原则（AI驱动）
-- **新对话模式**: 通过优化Prompt实现，无需修改代码
-- **行为改进**: 调整YAML配置即可，工程代码保持稳定
-- **能力提升**: 更强的AI模型自动提升系统能力
+2. 构建分析载荷并调用LLM:
+   - 日志: `analysis.payload.summary`
+   - LLM响应: `llm.response.summary` (含耗时)
+   - 理解详情: `llm.understanding.details`
+   - 工具计划: `llm.tool_plan.details`
 
-## 关键点
-- `understanding`输出必须包含`conversation_act`字段
-- `store`时自动合并`entities`→`ai_data`
-- 工具返回的`_meta`项需在展示时过滤
-- Threema渠道<500字长度控制保持不变
+3. 判断是否需要深入分析:
+   - `thinking_depth`: 0-3级复杂度
+   - `needs_deeper_analysis`: 是否需要更多轮次
+
+#### 第2-3轮 - 深度分析（按需）
+- 基于初步理解获取额外上下文
+- 日志: `thinking_loop.fetching_context`
+- 上下文解析: `thinking_loop.context_resolved`
+- 累积洞察并再次分析
+
+**输出契约 (AnalysisModel)**:
+```json
+{
+  "understanding": {
+    "intent": "用户意图",
+    "entities": {...},
+    "need_action": bool,
+    "need_clarification": bool,
+    "thinking_depth": 0-3,
+    "original_content": "原始消息"
+  },
+  "context_requests": [...],
+  "tool_plan": {"steps": [...]},
+  "response_directives": {...}
+}
+```
+
+### 步骤4: 澄清处理 (`_handle_clarification`)
+- 仅在 `need_clarification=true` 时触发
+- 生成澄清问题并直接返回
+- 日志: `step4.clarification.returned`
+
+### 步骤5: 执行和响应 (`_execute_and_respond`)
+1. **工具执行** (`_execute_tool_plan`):
+   - 调用MCP工具
+   - 支持验证循环（最多3轮）
+   - 日志: `tool_execution.verified_complete`
+
+2. **响应生成** (`_generate_response`):
+   - 简单确认 or 详细分析
+   - 基于 `response_directives.profile`
+   - 日志: `step5.execution.completed`
+
+### 步骤6: 实验记录 (`_record_experiment_result`)
+- 记录A/B测试结果（如果启用）
+- 用于Prompt优化迭代
+
+## 上下文管理 (ContextManager)
+
+### 基础上下文获取 (`get_basic_context`)
+```
+日志追踪:
+- context.basic.fetching_memories
+- context.memories.fetched (显示预览)
+- context.household.fetched (家庭成员)
+- context.basic.complete (总耗时)
+```
+
+### 上下文请求解析 (`resolve_context_requests`)
+支持的请求类型:
+- `recent_memories`: 最近记忆
+- `semantic_search`: 语义搜索（带嵌入向量）
+- `direct_search`: 直接过滤查询
+- `thread_summaries`: 线程摘要
+
+每个请求都有详细日志:
+- 开始: `context.requests.resolving`
+- 完成: `context.requests.resolved`
+- 耗时: `duration_ms`
+
+## 工具执行器 (ToolExecutor)
+
+### 执行流程
+1. 获取工具元数据和时间预算
+2. 执行工具步骤（支持并行）
+3. 验证结果完整性
+4. 必要时补充查询（验证循环）
+
+### MCP工具调用 (`_call_mcp_tool`)
+- HTTP调用MCP服务器
+- 详细日志: 工具名、参数、结果、耗时
+- 错误处理和降级策略
+
+## 性能优化
+
+### 缓存策略
+- **向量嵌入缓存**: 两级缓存（trace级 + 全局LRU）
+- **工具元数据缓存**: 减少重复获取
+- **上下文复用**: 思考循环间共享
+
+### Prompt优化 (v4_optimized)
+- 限制思考深度（0-1级）
+- 减少上下文请求
+- 直接执行原则
+- 简洁回复模式
+
+### 并发优化
+- 多个独立工具可并行执行
+- 上下文请求批量处理
+
+## 关键日志点（用于调试）
+
+```python
+# 主流程
+"message.received"           # 消息接收
+"step1.preprocess.completed" # 预处理完成
+"step3.analysis.completed"   # 分析完成
+"step5.execution.completed"  # 执行完成
+
+# AI分析
+"analysis.round.started"     # 分析轮次开始
+"llm.response.summary"       # LLM响应摘要
+"llm.understanding.details"  # 理解详情
+"llm.tool_plan.details"      # 工具计划
+
+# 上下文
+"context.basic.fetched"      # 基础上下文
+"context.requests.resolved"  # 请求解析完成
+
+# 工具执行
+"mcp.tool.calling"          # 工具调用开始
+"mcp.tool.success/failed"   # 工具执行结果
+```
+
+## 错误处理
+
+### 异常类型
+- `AnalysisError`: AI分析失败
+- `ContextResolutionError`: 上下文获取失败
+- `ToolPlanningError`: 工具规划失败
+- `MCPToolError`: MCP工具调用失败
+- `ToolTimeoutError`: 工具超时
+- `LLMError`: LLM调用失败
+
+### 降级策略
+1. 返回友好错误消息
+2. 使用fallback分析
+3. 记录详细错误日志
+
+## 扩展原则
+
+### 新功能添加（无需改代码）
+1. **修改Prompt**: 调整 `prompts/family_assistant_prompts.yaml`
+2. **添加工具**: 在MCP服务器添加，更新工具白名单
+3. **调整行为**: 通过Prompt blocks组合
+
+### 能力自动进化
+- AI模型升级 → 理解能力提升
+- 数据积累 → 个性化增强
+- Prompt优化 → 行为改进
+
+## 配置要点
+
+### 环境变量
+- `LOW_BUDGET_MODE`: 低成本模式
+- `MCP_SERVER_URL`: MCP服务地址
+- `DEBUG`: 调试模式（影响日志级别）
+
+### Prompt版本
+- `v4_default`: 完整分析版
+- `v4_optimized`: 快速响应版（推荐）
+
+## 使用建议
+
+### 性能监控
+- 关注 `thinking_rounds` 不应超过2
+- `duration_ms` 应在10-15秒内
+- 工具调用次数应最小化
+
+### 日志分析
+- 生产环境用INFO级别
+- 调试时用DEBUG级别
+- 重点关注 `step3.analysis` 和 `step5.execution`
+
+### 优化方向
+1. 减少思考循环（通过优化Prompt）
+2. 缓存常见查询结果
+3. 并行化独立工具调用
+4. 使用聚合工具替代多次查询

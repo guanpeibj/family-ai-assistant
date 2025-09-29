@@ -1,284 +1,475 @@
-# FAA 架构设计
+# FAA (Family AI Assistant) 系统架构文档
 
-## 系统架构图
+## 版本信息
+- **文档版本**: 2.0
+- **更新日期**: 2025.09.29
+- **AI引擎版本**: V2 Enhanced
+- **Prompt版本**: v4.1
 
+## 一、系统概览
+
+### 1.1 核心理念
+FAA 遵循三个核心设计原则：
+1. **AI驱动 (AI-Driven)**: 让AI决定业务逻辑，工程只提供执行框架
+2. **工程简化 (Engineering Simplicity)**: 统一流程，最小化代码，通过配置演进
+3. **稳定实现 (Stable Implementation)**: 完善的错误处理、日志追踪和降级策略
+
+### 1.2 架构图
 ```
-┌─────────────────┐     ┌─────────────────┐
-│   Threema App   │     │  Email Client   │
-└────────┬────────┘     └────────┬────────┘
-         │                       │
-         ▼                       ▼
-┌─────────────────────────────────────────┐
-│            FastAPI (Port 8000)          │
-│  ┌──────────────┐  ┌────────────────┐  │
-│  │   Webhook    │  │  Message API    │  │
-│  └──────┬───────┘  └───────┬────────┘  │
-│         │                  │            │
-│         ▼                  ▼            │
-│     ┌────────────────────────────┐     │
-│     │  AI Engine V2 (智能增强版)   │     │
-│     │  • 统一理解（含智能上下文）     │     │
-│     │  • 思考循环（最多3轮）        │     │
-│     │  • 多维度关联分析           │     │
-│     │  • 工具反馈验证             │     │
-│     └────────────┬───────────────┘     │
-└──────────────────┼─────────────────────┘
-                   │
-                   ▼
-        ┌─────────────────────┐
-        │  MCP HTTP Wrapper   │
-        │    (Port 9000)      │
-        └──────────┬──────────┘
-                   │
-                   ▼
-        ┌─────────────────────┐
-        │   Generic MCP Tools │
-        │ • store             │
-        │ • search            │
-        │ • aggregate         │
-        │ • schedule_reminder │
-        └──────────┬──────────┘
-                   │
-                   ▼
-        ┌─────────────────────┐
-        │    PostgreSQL       │
-        │   with pgvector     │
-        └─────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                        用户交互层                            │
+│     Threema │ Web API │ Email │ Future Channels            │
+└─────────────────┬────────────────────────────────────────────┘
+                  │
+┌─────────────────▼────────────────────────────────────────────┐
+│                     FastAPI 应用层                           │
+│  • /message 端点：直接消息处理                               │
+│  • /threema/webhook：Threema集成                           │
+│  • /media/get：媒体文件访问                                │
+│  • /health：健康检查                                       │
+└─────────────────┬────────────────────────────────────────────┘
+                  │
+┌─────────────────▼────────────────────────────────────────────┐
+│              AI引擎 V2 (src/ai_engine.py)                    │
+│ ┌──────────────────────────────────────────────────────────┐ │
+│ │                    主处理流程 (6步骤)                     │ │
+│ │ 1. 预处理 (_preprocess_message)                         │ │
+│ │ 2. 实验版本 (_get_experiment_version)                   │ │
+│ │ 3. AI分析 (_analyze_message) 🧠 支持3轮思考循环         │ │
+│ │ 4. 澄清处理 (_handle_clarification) 可选                │ │
+│ │ 5. 执行响应 (_execute_and_respond)                      │ │
+│ │ 6. 实验记录 (_record_experiment_result)                 │ │
+│ └──────────────────────────────────────────────────────────┘ │
+│                                                               │
+│ ┌──────────────────────────────────────────────────────────┐ │
+│ │                    核心组件                              │ │
+│ │ • ContextManager: 智能上下文管理                        │ │
+│ │ • ToolExecutor: 工具编排执行                           │ │
+│ │ • MessageProcessor: 消息预处理                         │ │
+│ │ • 嵌入缓存: 两级缓存优化                               │ │
+│ └──────────────────────────────────────────────────────────┘ │
+└─────────────────┬────────────────────────────────────────────┘
+                  │ HTTP
+┌─────────────────▼────────────────────────────────────────────┐
+│          MCP工具服务器 (mcp-server/generic_mcp_server.py)    │
+│  通用工具集（无业务逻辑）:                                   │
+│  • store: 存储任意信息                                      │
+│  • search: 语义/精确搜索                                    │
+│  • aggregate: 数据聚合统计                                  │
+│  • schedule_reminder: 提醒管理                              │
+│  • update_memory_fields: 更新记忆                           │
+│  • render_chart: 图表生成                                   │
+└─────────────────┬────────────────────────────────────────────┘
+                  │
+┌─────────────────▼────────────────────────────────────────────┐
+│              PostgreSQL + pgvector                           │
+│  • memories: 核心记忆表 (JSONB + Vector)                    │
+│  • users: 用户管理                                          │
+│  • reminders: 提醒任务                                      │
+│  • interactions: 交互记录                                   │
+│  • households: 家庭结构                                     │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-## 核心组件
+## 二、核心工作流
 
-### 1. AI Engine V2 (智能增强版 - 2025.01升级)
-- **位置**: `src/ai_engine_v2.py`
-- **模块化设计**: 将复杂逻辑拆分为专门的处理器类
-- **统一理解入口**: 单一AI理解流程，自动处理所有对话复杂度  
-- **智能上下文感知**: 基础上下文（最近对话）+ 可选深度搜索（语义相关）
-- **AI自主对话关系识别**: 自动识别跟进、新话题、修正等对话关系
-- **零工程预设**: 完全由AI决定信息合并、完整性判断、澄清策略
-- **🆕 A/B 测试支持**: 支持安全的 Prompt 版本实验
-- **🆕 统一异常处理**: 分层异常体系和用户友好错误消息
-- **🆕 性能监控**: 工具调用统计和响应时间追踪
+### 2.1 消息处理流程 (process_message)
 
-#### 智能增强特性（V2新增）
-- **智能Context管理**：
-  * 时序维度：自动获取历史趋势数据
-  * 实体关联：获取相关人员所有记录
-  * 领域关联：健康问题同时考虑营养、运动等
-  * 因果关联：寻找原因和影响因素
-- **思考循环支持**：
-  * 最多3轮深度分析
-  * thinking_depth分级处理（0-3级）
-  * 基于insights累积理解
-- **工具反馈优化**：
-  * 执行后验证结果完整性
-  * 支持3种fallback策略
-  * 最多3轮补充查询
+```python
+async def process_message(content: str, user_id: str, context: Dict) -> str:
+    """
+    主入口 - AI驱动的统一流程
+    耗时目标: 简单操作 <5秒, 普通查询 <10秒, 复杂分析 <15秒
+    """
+    # 步骤1: 预处理
+    # - 合并附件文本(OCR/STT/Vision)
+    # - 日志: step1.preprocess.completed
+    
+    # 步骤2: 获取实验版本
+    # - 支持A/B测试不同Prompt
+    # - 当前: v4_optimized (快速版)
+    
+    # 步骤3: AI分析 (核心)
+    # - 支持多轮思考(最多3轮)
+    # - 智能获取所需上下文
+    # - 输出理解+工具计划
+    
+    # 步骤4: 澄清处理 (可选)
+    # - 仅在need_clarification时
+    
+    # 步骤5: 执行和响应
+    # - 执行工具计划
+    # - 生成最终响应
+    
+    # 步骤6: 实验记录
+    # - 记录A/B测试数据
+```
 
-### 2. Prompt 管理系统（智能增强）
+### 2.2 AI分析详解 (_analyze_message)
+
+#### 思考循环机制
+```
+第1轮: 基础理解
+├── 获取基础上下文 (最近4条对话 + 家庭信息)
+├── 构建分析载荷
+├── 调用LLM分析
+└── 判断是否需要深入 (thinking_depth)
+
+第2-3轮: 深度分析 (可选)
+├── 基于初步理解请求额外上下文
+├── 累积洞察 (accumulated_context)
+├── 再次调用LLM深化理解
+└── 输出最终分析结果
+```
+
+#### 输出契约 (AnalysisModel)
+```json
+{
+  "understanding": {
+    "intent": "用户意图",
+    "entities": {
+      "amount": 100,
+      "type": "购物"
+    },
+    "need_action": true,
+    "need_clarification": false,
+    "thinking_depth": 1,
+    "needs_deeper_analysis": false,
+    "original_content": "原始消息"
+  },
+  "context_requests": [
+    {"name": "recent_memories", "kind": "recent_memories"}
+  ],
+  "tool_plan": {
+    "steps": [
+      {"tool": "store", "args": {...}}
+    ]
+  },
+  "response_directives": {
+    "profile": "compact"
+  }
+}
+```
+
+### 2.3 上下文管理 (ContextManager)
+
+#### 基础上下文
+- **light_context**: 最近对话记录
+- **household**: 家庭成员信息
+
+#### 动态上下文请求
+- **recent_memories**: 历史记忆
+- **semantic_search**: 语义搜索
+- **direct_search**: 精确过滤
+- **thread_summaries**: 线程摘要
+
+### 2.4 工具执行 (ToolExecutor)
+
+#### 执行流程
+1. 获取工具元数据
+2. 检查时间预算
+3. 执行工具步骤
+4. 验证结果完整性
+5. 必要时补充查询
+
+#### 验证循环
+- 最多3轮验证
+- 检查数据完整性
+- 自动补充缺失信息
+
+## 三、关键技术特性
+
+### 3.1 日志系统
+
+#### 主流程日志
+```
+message.received           # 接收消息
+step1.preprocess.completed # 预处理完成
+step3.analysis.completed   # 分析完成
+step5.execution.completed  # 执行完成
+```
+
+#### 分析详细日志
+```
+analysis.round.started        # 轮次开始
+analysis.basic_context.details # 上下文详情
+llm.response.summary          # LLM响应
+llm.understanding.details     # 理解详情
+llm.tool_plan.details        # 工具计划
+```
+
+#### 性能追踪
+- 每个步骤都有 `duration_ms`
+- 支持 `trace_id` 全链路追踪
+- 工具调用计数和耗时
+
+### 3.2 缓存机制
+
+#### 向量嵌入缓存
+- **Trace级缓存**: 单次请求内复用
+- **全局LRU缓存**: 跨请求复用
+- **TTL**: 3600秒
+- **容量**: 1000项
+
+#### 工具元数据缓存
+- 缓存MCP工具列表
+- 减少HTTP调用
+
+### 3.3 Prompt管理
+
+#### 版本体系
 ```yaml
-# prompts/family_assistant_prompts.yaml
-version: "4.0"
-current: "v4_default"
-blocks:
-  system_identity: |
-    ...
-  # V2新增智能块
-  intelligent_context_strategy: |  # 多维度关联策略
-  thinking_loop_strategy: |        # 思考循环策略
-  tool_feedback_optimization: |    # 工具反馈优化
-  comprehensive_analysis_guide: |  # 综合分析框架
+current: "v4_optimized"  # 当前激活版本
+
 prompts:
-  v4_default:
-    system_blocks: [system_identity, ...]
-    understanding_blocks: [
-      understanding_contract,
-      intelligent_context_strategy,  # 新增
-      thinking_loop_strategy,        # 新增
-      context_requests_examples,
-      planning_brief,
-      comprehensive_analysis_guide   # 新增
-    ]
-    response_blocks: [response_contract]
-    response_ack_blocks: [ack_prompt]
-    tool_planning_blocks: [
-      planning_brief,
-      tool_feedback_optimization     # 新增
-    ]
-    profiles:
-      threema:
-        response_blocks: [response_contract, response_voice_compact]
+  v4_default:    # 完整分析版
+    - 支持3轮思考
+    - 全面上下文
+    - 详细响应
+    
+  v4_optimized:  # 快速响应版(推荐)
+    - 限制1轮思考
+    - 最少上下文
+    - 简洁回复
 ```
 
-### 3. MCP 工具层（完全通用）
-- **零业务逻辑**: 所有业务理解由AI完成
-- **通用接口**: store/search/aggregate等基础能力
-- **仅消费向量**: 语义向量统一由 AI Engine 生成；MCP 通过参数 `embedding`（store）与 `query_embedding`（search）接收并在数据库执行相似度检索；未提供时退化为非向量过滤
-- **本地向量**: 默认使用本地开源向量模型（fastembed，如 `BAAI/bge-small-zh-v1.5`），无需外网与云 API；也可配置回退到 OpenAI 兼容 Embedding
-- **HTTP包装器**: 支持容器化部署
+#### 动态注入
+- `{{DYNAMIC_TOOLS}}`: 工具列表
+- `{{DYNAMIC_TOOL_SPECS}}`: 工具规格
 
-### 4. 数据模型
+### 3.4 错误处理
+
+#### 异常层级
+```
+BaseAIException
+├── AnalysisError       # AI分析失败
+├── ContextResolutionError # 上下文失败
+├── ToolPlanningError   # 规划失败
+├── MCPToolError        # 工具调用失败
+├── ToolTimeoutError    # 工具超时
+└── LLMError           # LLM调用失败
+```
+
+#### 降级策略
+1. 工具失败 → 基础响应
+2. LLM失败 → 友好提示
+3. 严重错误 → 详细日志
+
+## 四、数据模型
+
+### 4.1 核心表结构
+
+#### memories (核心记忆表)
 ```sql
--- 通用记忆表
 CREATE TABLE memories (
     id UUID PRIMARY KEY,
     user_id UUID NOT NULL,
     content TEXT NOT NULL,
-    ai_understanding JSONB,  -- AI自由决定存什么
-    embedding vector(512),   -- 语义向量（BAAI/bge-small-zh-v1.5，由 AI Engine 生成并传入）
-    amount DECIMAL,          -- 精确金额(可选)
-    occurred_at TIMESTAMP    -- 精确时间(可选)
+    ai_understanding JSONB,    -- AI自由存储
+    embedding vector(1536),     -- 语义向量
+    amount DECIMAL(10,2),       -- 金额(可选)
+    occurred_at TIMESTAMP,      -- 发生时间
+    created_at TIMESTAMP DEFAULT NOW()
 );
 ```
 
-## AI 驱动的统一流程 (V2智能增强版)
+#### 索引策略
+- 向量索引: `ivfflat`
+- JSONB索引: `jsonb_path_ops`
+- 表达式索引: `thread_id`, `type`, `channel`
+- 组合索引: 时间+用户
 
-### 核心理念: 让AI决定一切
-```
-用户输入 → 统一AI理解（含上下文） → 工具计划 → 执行 → 回复
+### 4.2 JSONB灵活性
+
+AI可以在 `ai_understanding` 中存储任意结构:
+```json
+{
+  "type": "expense",
+  "amount": 100,
+  "category": "购物",
+  "thread_id": "20250929",
+  "entities": {
+    "shop": "超市",
+    "items": ["牛奶", "面包"]
+  },
+  // AI可以自由扩展...
+  "confidence": 0.95,
+  "related_memories": ["uuid1", "uuid2"]
+}
 ```
 
-### 1. 统一AI理解流程
+## 五、性能优化
+
+### 5.1 目标指标
+| 操作类型 | 目标耗时 | 当前耗时 |
+|---------|---------|---------|
+| 简单记录 | <5秒 | 5-8秒 |
+| 普通查询 | <10秒 | 10-12秒 |
+| 复杂分析 | <15秒 | 15-18秒 |
+| 思考轮数 | ≤2轮 | 1-2轮 |
+
+### 5.2 优化策略
+
+#### 已实施
+- ✅ Prompt优化 (v4_optimized)
+- ✅ 向量嵌入缓存
+- ✅ 减少思考轮数
+- ✅ 简化上下文请求
+
+#### 计划中
+- [ ] 查询结果缓存
+- [ ] 工具并行执行
+- [ ] 流式响应
+- [ ] 预编译Prompt
+
+### 5.3 监控要点
 ```python
-async def process_message(content, user_id, context):
-    light_context = await get_recent_memories(user_id, thread=context.thread_id)
-
-    analysis = await analyze_message(
-        message=content,
-        user_id=user_id,
-        context=context,
-        light_context=light_context,
-    )
-
-    if analysis.understanding.need_clarification:
-        return await generate_clarification(analysis.understanding)
-
-    context_payload = await resolve_context_requests(analysis.context_requests)
-    plan = await build_tool_plan(
-        understanding=analysis.understanding,
-        context_payload=context_payload,
-        analysis_plan=analysis.tool_plan,
-    )
-    execution_result = await execute_tool_steps(plan.steps, context_payload)
-    return await generate_response(
-        understanding=analysis.understanding,
-        execution_result=execution_result,
-        context_payload=context_payload,
-        response_directives=analysis.response_directives,
-    )
+# 关键监控指标
+{
+  "thinking_rounds": 1-2,      # 思考轮数
+  "tool_calls": 1-3,           # 工具调用数
+  "total_duration_ms": <15000, # 总耗时
+  "cache_hit_rate": >0.5       # 缓存命中率
+}
 ```
 
-分析返回的结构是固定契约：
-- `understanding`：AI对本轮消息的结构化理解（意图、实体、澄清状态等）
-- `context_requests`：LLM声明需要的额外上下文（recent_memories / semantic_search / direct_search ...）
-- `tool_plan`：草稿步骤与所需上下文引用
-- `response_directives`：回复所需的 profile、语气与关注点
+## 六、部署架构
 
-### 2. 智能上下文管理
-- `context_requests` 描述需要的资源类型（例如近期对话、语义检索结果、线程摘要、指定过滤搜索等）
-- 引擎统一通过 `_resolve_context_requests` 调用 MCP `search / batch_search` 等工具拉取数据，结果写入 `context_payload`
-- 工具计划可通过 `{"use_context": "recent_history"}` 等引用上下文数据，执行阶段会自动解析
-
-## 自我进化机制 - 核心设计理念
-
-> **"工程固定，能力自动增长"** - 即使工程代码保持不变，系统的智能和能力也随着AI模型进步和数据积累而自动提升
-
-### 1. AI模型升级 → 能力自动提升
-```bash
-# 仅需更新配置，无需修改代码
-OPENAI_MODEL=gpt-4o  # 未来可能是 gpt-5, claude-4 等
-```
-**自动获得的新能力**：
-- 更准确的对话关系识别
-- 更智能的上下文理解
-- 更自然的多轮对话处理
-- 更复杂的推理能力
-
-### 2. Prompt优化 → 行为自动改进
-```yaml
-# 只需调整YAML，行为立即优化
-contextual_understanding_rules: |
-  AI自主上下文理解：
-  - 自动识别跟进回答："给二女儿的"→补充前一个记账请求
-  - 自动合并信息：跟进+原始请求→完整理解
-```
-
-### 3. 数据积累 → 个性化自动增强
-- 历史对话提供更好的上下文
-- AI自学习家庭成员偏好
-- JSONB开放结构支持AI发现新信息类型
-
-### 4. 零工程干预的能力扩展
-- **新对话模式**：AI自动适应，无需编程
-- **复杂场景处理**：更强模型自动胜任
-- **个性化改进**：随使用自动优化
-
-## 部署架构
-
-### Docker Compose 服务
+### 6.1 容器化部署
 ```yaml
 services:
-  faa-api:      # FastAPI主服务
-  faa-mcp:      # MCP HTTP包装器
-  postgres:     # 数据库
+  faa-api:       # FastAPI应用
+    - AI引擎
+    - API端点
+    - 后台任务
+    
+  faa-mcp:       # MCP工具服务
+    - HTTP包装器
+    - 通用工具集
+    
+  faa-postgres:  # 数据库
+    - PostgreSQL 15
+    - pgvector扩展
 ```
 
-### 环境隔离
-- 开发环境：DevContainer
-- 测试环境：docker-compose
-- 生产环境：云服务器 + Docker
+### 6.2 环境配置
 
-## 安全设计
+#### 核心配置
+```bash
+# AI配置
+OPENAI_API_KEY=xxx
+OPENAI_MODEL=gpt-4
+AI_PROVIDER=openai
 
-### 1. 数据隔离
-- 用户数据通过user_id严格隔离
-- MCP工具自动过滤用户数据
+# 系统配置
+DEBUG=false
+LOW_BUDGET_MODE=false
+MCP_SERVER_URL=http://faa-mcp:8000
 
-### 2. 加密通信
-- Threema端到端加密
-- API使用HTTPS（生产环境）
+# 数据库
+DATABASE_URL=postgresql://...
+```
 
-### 3. 敏感信息
-- OpenAI API Key环境变量
-- 数据库密码环境变量
+## 七、开发指南
 
-## 扩展性设计
+### 7.1 添加新功能（无需改代码）
 
-### 1. 新渠道接入
-- 实现新的webhook endpoint
-- 复用现有AI Engine
+#### 方法1: 修改Prompt
+```yaml
+# prompts/family_assistant_prompts.yaml
+blocks:
+  my_new_feature: |
+    新功能的行为描述...
 
-### 2. 新功能添加
-- 更新prompt即可支持新场景
-- 无需修改核心代码
+prompts:
+  v4_optimized:
+    understanding_blocks:
+      - my_new_feature  # 添加到块列表
+```
 
-### 3. 多语言支持
-- 通过prompt版本实现
-- AI自动适应语言
+#### 方法2: 调整工具使用
+通过Prompt引导AI使用现有工具的新组合
 
-## 性能优化
+### 7.2 添加新工具
 
-### 1. 向量搜索
-- pgvector索引加速语义搜索
-- 相似度计算在数据库层完成
+1. 在MCP服务器添加工具:
+```python
+# mcp-server/generic_mcp_server.py
+async def _new_tool(self, ...):
+    """保持通用性，无业务逻辑"""
+    pass
+```
 
-### 2. 连接池
-- asyncpg连接池管理
-- 避免频繁建立连接
+2. 更新工具白名单（如需要）
 
-### 3. 异步处理
-- 全异步架构
-- 支持并发请求
+### 7.3 调试技巧
 
-## 监控与日志
+#### 日志调试
+```bash
+# 开启调试模式
+DEBUG=true
 
-### 1. 结构化日志
-- structlog JSON格式
-- 便于日志分析
+# 关键日志点
+grep "step3.analysis" logs.txt    # 分析过程
+grep "trace_id=xxx" logs.txt      # 追踪请求
+grep "duration_ms" logs.txt       # 性能分析
+```
 
-### 2. 健康检查
-- /health endpoint
-- Docker健康检查
+#### 性能分析
+```python
+# 查看各步骤耗时
+"step1.preprocess.completed" duration_ms=10
+"step3.analysis.completed" duration_ms=8000
+"step5.execution.completed" duration_ms=3000
+```
 
-### 3. 错误追踪
-- 详细的错误上下文
-- AI决策过程可追溯 
+## 八、最佳实践
+
+### 8.1 Prompt优化
+- 使用 v4_optimized 版本
+- 限制思考深度为0-1
+- 减少不必要的上下文请求
+- 使用聚合工具替代多次查询
+
+### 8.2 工具使用
+- 直接执行，避免预检查
+- 使用精确过滤条件
+- 批量操作优于逐个处理
+
+### 8.3 错误处理
+- 提供友好的用户提示
+- 记录详细的调试信息
+- 实施合理的降级策略
+
+## 九、路线图
+
+### 2025 Q1 (已完成)
+- ✅ AI引擎V2重构
+- ✅ 思考循环优化
+- ✅ 详细日志系统
+- ✅ Prompt v4优化
+
+### 2025 Q2 (进行中)
+- [ ] 查询结果缓存
+- [ ] 工具并行化
+- [ ] 流式响应
+- [ ] 性能监控面板
+
+### 2025 Q3-Q4
+- [ ] 多模态增强
+- [ ] 自适应Prompt
+- [ ] 分布式执行
+- [ ] 智能预加载
+
+## 十、参考文档
+
+- [AI引擎工作流](.cursor/rules/01-ai-engine.mdc)
+- [Prompt管理](.cursor/rules/02-prompts.mdc)
+- [MCP工具开发](.cursor/rules/03-mcp-tools.mdc)
+- [数据库设计](.cursor/rules/05-database-and-index.mdc)
+- [部署指南](DEPLOY.md)
+
+---
+*Architecture Version: 2.0*
+*Last Updated: 2025.09.29*
+*Maintained by: AI-Driven Development Team*

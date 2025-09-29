@@ -335,8 +335,36 @@ blocks:
     2. **单次查询**：优先使用聚合工具而非多次查询
     3. **精准参数**：使用精确过滤条件，避免模糊搜索
     
+    ### 关键工具参数要求（必须严格遵守）
+    ```json
+    // store工具 - 必需3个参数
+    {
+      "tool": "store",
+      "args": {
+        "content": "原始用户消息或提取的关键内容",
+        "ai_data": {
+          "intent": "识别的意图",
+          "entities": {...}, 
+          "occurred_at": "ISO时间",
+          "thread_id": "{{thread_id}}"
+        },
+        "user_id": "{{user_id}}"
+      }
+    }
+    
+    // search工具 - user_id必需
+    {
+      "tool": "search", 
+      "args": {
+        "query": "搜索内容",
+        "user_id": "{{user_id}}",
+        "filters": {...}  // 可选
+      }
+    }
+    ```
+    
     优化策略：
-    - 记录类：直接 store，不预先检查
+    - 记录类：直接 store，**确保content+ai_data+user_id三参数完整**
     - 查询类：直接 search 或 aggregate，不预先探索
     - 提醒类：直接 schedule_reminder，不验证
     
@@ -344,6 +372,7 @@ blocks:
     - 多步验证流程
     - 预先检查是否存在
     - 获取额外的"以防万一"数据
+    - **参数不完整的工具调用**
 
 prompts:
   v4_default:

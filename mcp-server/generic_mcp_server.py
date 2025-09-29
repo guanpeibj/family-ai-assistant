@@ -118,7 +118,7 @@ class GenericMCPServer:
                     # 构建查询
                     if shared_thread_mode:
                         sql = """
-                        SELECT id, content, ai_understanding, amount, occurred_at, user_id,
+                        SELECT id, content, ai_understanding, amount, occurred_at, created_at, user_id,
                                1 - (embedding <=> $1::vector) as similarity
                         FROM memories
                         WHERE embedding IS NOT NULL
@@ -127,7 +127,7 @@ class GenericMCPServer:
                         params = [query_embedding_text]
                     else:
                         sql = """
-                        SELECT id, content, ai_understanding, amount, occurred_at, user_id,
+                        SELECT id, content, ai_understanding, amount, occurred_at, created_at, user_id,
                                1 - (embedding <=> $1::vector) as similarity
                         FROM memories
                         WHERE user_id = $2 AND embedding IS NOT NULL
@@ -209,14 +209,14 @@ class GenericMCPServer:
                     used_vector = False
                     if shared_thread_mode:
                         base_sql = """
-                        SELECT id, content, ai_understanding, amount, occurred_at, user_id
+                        SELECT id, content, ai_understanding, amount, occurred_at, created_at, user_id
                         FROM memories
                         WHERE TRUE
                         """
                         params = []
                     else:
                         base_sql = """
-                        SELECT id, content, ai_understanding, amount, occurred_at, user_id
+                        SELECT id, content, ai_understanding, amount, occurred_at, created_at, user_id
                         FROM memories
                         WHERE user_id = $1
                         """
@@ -314,6 +314,7 @@ class GenericMCPServer:
                         "ai_understanding": json.loads(row['ai_understanding']),
                         "amount": float(row['amount']) if row['amount'] else None,
                         "occurred_at": row['occurred_at'].isoformat() if row['occurred_at'] else None,
+                        "created_at": row['created_at'].isoformat() if row['created_at'] else None,
                         "user_id": str(row['user_id'])
                     }
                     if 'similarity' in row:

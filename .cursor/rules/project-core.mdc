@@ -1,65 +1,205 @@
 ---
-alwaysApply: true
+globs: ["src/**", "prompts/**", "mcp-server/**"]
+description: FAA项目核心理念与最新工作流
 ---
-# FAA (Family AI Assistant) 项目核心理念
 
-## 项目定位
-FAA 是一个家庭 AI 助手，专为解决家庭日常需求而设计：
-- 智能记录和管理家庭财务、健康信息、日常杂事
-- 通过 Threema、邮件等多渠道与用户交互
-- AI 驱动、极简设计、实用至上
-- 即使工程代码保持不变，系统的智能和能力也应该随着 AI 模型的进步、数据的积累和prompts的优化而自动提升
+# FAA (Family AI Assistant) 项目核心理念 v2
 
-## 核心架构原则
+## 三个核心原则 🎯
 
-### 1. 极简三层架构
+### 1. AI驱动 (AI-Driven)
+- **让AI决定一切业务逻辑**：不硬编码规则，通过Prompt引导行为
+- **开放数据结构**：JSONB让AI自由存储和扩展信息
+- **工具通用化**：MCP工具无业务逻辑，用途由AI决定
+
+### 2. 工程简化 (Engineering Simplicity)
+- **统一处理流程**：6步骤标准流程，清晰可追踪
+- **最小化代码**：功能通过Prompt和数据演进，不改代码
+- **组件解耦**：AI引擎、MCP工具、API层各司其职
+
+### 3. 稳定实现 (Stable Implementation)
+- **完善错误处理**：多级异常捕获和友好提示
+- **详细日志追踪**：每步都有日志，便于调试
+- **降级策略**：工具失败有fallback，系统保持可用
+
+## 最新架构 (2025.09)
+
 ```
-                            Prompt manager
-                                    ↓
-用户 → Threema/邮件 → FastAPI → AI Engine → MCP Tools → PostgreSQL
-                                    ↓
-                          OpenAI API / Other AI
+┌─────────────────────────────────────────────────────────┐
+│                     用户交互层                           │
+│  Threema │ API │ Email │ Future Channels                │
+└─────────────┬───────────────────────────────────────────┘
+              │
+┌─────────────▼───────────────────────────────────────────┐
+│                   AI引擎 V2 (核心)                       │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │ 1.预处理 → 2.版本选择 → 3.AI分析(思考循环)      │   │
+│  │ 4.澄清? → 5.执行&响应 → 6.实验记录              │   │
+│  └──────────────────────────────────────────────────┘   │
+│  • ContextManager: 智能上下文获取                       │
+│  • ToolExecutor: 工具编排执行                          │
+│  • 嵌入缓存: 两级优化                                  │
+└─────────────┬───────────────────────────────────────────┘
+              │
+┌─────────────▼───────────────────────────────────────────┐
+│              MCP工具服务器 (通用能力)                    │
+│  store │ search │ aggregate │ schedule_reminder │ ...   │
+└─────────────┬───────────────────────────────────────────┘
+              │
+┌─────────────▼───────────────────────────────────────────┐
+│                   PostgreSQL + pgvector                  │
+│  memories │ users │ reminders │ interactions            │
+└─────────────────────────────────────────────────────────┘
 ```
 
-### 2. AI 驱动决策
-- **让 AI 决定一切**：消息理解、数据存储、查询方式都由 AI 决定
-- **零预设逻辑**：不固定分类、不固定字段、不固定流程
-- **动态适应**：通过调整 prompt 即可扩展功能
+## 工作流详解 (ai_engine.py)
 
-### 3. 数据模型设计
-- 使用通用的 `memories` 表存储所有信息
-- `ai_understanding` JSONB 字段让 AI 自由存储理解的内容
-- 数据模型通用性的同时，对一些数据支持精确查询和储存
-- 混合存储：语义向量 + 结构化数据
+### 消息处理主流程
+```python
+async def process_message(content, user_id, context) -> str:
+    # 步骤1: 预处理（合并附件文本）
+    # 步骤2: 获取实验版本（A/B测试）
+    # 步骤3: AI分析（核心，支持3轮思考）
+    # 步骤4: 处理澄清（如需要）
+    # 步骤5: 执行工具并生成响应
+    # 步骤6: 记录实验结果
+```
 
-### 4. MCP 工具设计
-- 工具完全泛化，不包含业务逻辑
-- 提供操作数据库的完整能力，包括store, search, aggregate, schedule_reminder等等
-- 工具的编排使用，完全由 AI 在运行时决定
+### AI分析核心（思考循环）
+```python
+async def _analyze_message(...) -> AnalysisModel:
+    for round in range(1, 4):  # 最多3轮
+        # 获取上下文（第1轮基础，后续累积）
+        # 调用LLM分析
+        # 判断是否需要深入（thinking_depth）
+        # 必要时获取额外上下文继续
+```
 
-### 5. ai engine和promts完美配合
-- 充分利用prompts，最大化激发llm智能，以让ai驱动主要流程
-- 合理调用llm，减少幻觉、提高决策准确性，降低成本
-- 专题化提示，每步用更聚焦的 prompt，模型更易命中要点
+### 关键日志点（便于调试）
+- `step1-6`: 主流程各步骤
+- `analysis.round`: 思考轮次
+- `llm.response`: LLM调用详情
+- `context.*`: 上下文获取
+- `mcp.tool.*`: 工具执行
 
+## Prompt管理 (v4.1)
 
-## 开发原则
-1. **简单直接**：代码清晰易懂，避免过度设计
-2. **快速实现**：功能优先，先跑通再优化
-3. **易于扩展**：为未来功能留足空间
-4. **专注实用**：解决实际问题，不追求技术炫技
-5. **自我进化**：工程相对固定，但随着 AI 智能提升和数据积累，系统能力自动增长
+### 版本策略
+- **v4_default**: 完整分析版（深度思考）
+- **v4_optimized**: 快速响应版（推荐生产）
 
-## 技术栈
-- Python 3.12.11 + FastAPI
-- PostgreSQL + pgvector
-- MCP (Model Context Protocol)
-- OpenAI API
-- Docker + Docker Compose
-- DevContainer 开发环境
+### 优化要点
+```yaml
+understanding_contract_optimized:
+  thinking_depth: 0|1  # 限制思考深度
+  needs_deeper_analysis: false  # 默认不深入
+  context_requests: []  # 最少上下文
+  response_directives:
+    profile: "compact"  # 简洁回复
+```
 
-## 文件引用
-- ai驱动：[ai-evolution.mdc](mdc:ai-evolution.mdc)
-- 项目构想：[readme.MD](mdc:readme.MD)
-- 架构文档：[ARCHITECTURE.md](mdc:ARCHITECTURE.md)
-- 部署文档：[DEPLOY.md](mdc:DEPLOY.md)
+## 性能指标
+
+### 目标值
+- 简单记录: < 5秒
+- 普通查询: < 10秒
+- 复杂分析: < 15秒
+- 思考轮数: ≤ 2轮
+
+### 优化方向
+1. **Prompt优化**: 减少思考轮数
+2. **缓存策略**: 向量嵌入、查询结果
+3. **并行执行**: 独立工具并发
+4. **聚合查询**: 一次查询替代多次
+
+## 开发指南
+
+### 添加新功能（无需改代码）
+1. 修改 `prompts/family_assistant_prompts.yaml`
+2. 添加新的blocks或调整现有blocks
+3. 切换current版本测试
+
+### 添加新工具
+1. 在 `mcp-server/generic_mcp_server.py` 添加
+2. 保持通用性，不含业务逻辑
+3. 更新工具白名单（如需要）
+
+### 调试技巧
+1. 设置 `DEBUG=true` 查看详细日志
+2. 关注 `trace_id` 追踪完整流程
+3. 查看 `duration_ms` 找性能瓶颈
+
+## 演进路线
+
+### 短期（2025 Q1）
+- ✅ 思考循环优化
+- ✅ 详细日志追踪
+- ✅ Prompt快速版本
+- [ ] 查询结果缓存
+
+### 中期（2025 Q2）
+- [ ] 流式响应
+- [ ] 工具并行化
+- [ ] 智能预加载
+
+### 长期（2025 Q3+）
+- [ ] 多模态理解增强
+- [ ] 自适应Prompt选择
+- [ ] 分布式工具执行
+
+## 关键文件映射
+
+```
+src/ai_engine.py          # 核心引擎（本文档重点）
+├── process_message()     # 主入口
+├── _analyze_message()    # AI分析
+├── ContextManager        # 上下文管理
+└── ToolExecutor         # 工具执行
+
+prompts/family_assistant_prompts.yaml  # Prompt配置
+├── v4_default           # 默认版本
+└── v4_optimized        # 优化版本
+
+mcp-server/generic_mcp_server.py  # MCP工具
+├── store()             # 存储
+├── search()            # 搜索
+└── aggregate()         # 聚合
+```
+
+## 重要约定
+
+### 数据流向
+```
+用户输入 → AI理解 → 工具执行 → 响应生成
+         ↓         ↓         ↓
+     (Prompt)   (MCP)    (Prompt)
+```
+
+### 决策权归属
+- **AI决定**: 意图理解、工具选择、响应内容
+- **工程提供**: 执行框架、工具能力、数据存储
+- **Prompt控制**: 行为规范、风格指引、能力边界
+
+### 错误处理
+1. 工具失败 → 降级到基础响应
+2. LLM失败 → 返回友好提示
+3. 严重错误 → 记录日志并通知
+
+## 监控要点
+
+### 关键指标
+- `thinking_rounds`: 思考轮数（应≤2）
+- `tool_calls_count`: 工具调用数
+- `duration_ms`: 各步骤耗时
+- `cache_hit_rate`: 缓存命中率
+
+### 告警阈值
+- 响应时间 > 20秒
+- 思考轮数 > 3轮
+- 工具失败率 > 10%
+- 错误率 > 5%
+
+---
+*Last Updated: 2025.09.29*
+*Version: 2.0*
+*AI Engine: V2 Enhanced*
