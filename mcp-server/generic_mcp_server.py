@@ -97,8 +97,15 @@ class GenericMCPServer:
                 "error": str(e)
             }
     
-    async def _search(self, query: str, user_id: str, filters: Optional[Dict[str, Any]] = None, query_embedding: Optional[Any] = None) -> List[Dict[str, Any]]:
-        """搜索相关记忆，支持语义和精确查询"""
+    async def _search(self, user_id: str, query: Optional[str] = None, filters: Optional[Dict[str, Any]] = None, query_embedding: Optional[Any] = None) -> List[Dict[str, Any]]:
+        """搜索相关记忆，支持语义和精确查询
+        
+        参数:
+        - user_id: 必需，用户标识
+        - query: 可选，查询文本（用于trigram匹配）
+        - filters: 可选，精确过滤条件
+        - query_embedding: 可选，查询向量
+        """
         try:
             async with self.pool.acquire() as conn:
                 results = []
@@ -1439,7 +1446,7 @@ class GenericMCPServer:
             return await self._store(content, ai_data, user_id, embedding)
         
         @self.server.tool()
-        async def search(query: str, user_id: str, filters: Optional[Dict[str, Any]] = None, query_embedding: Optional[Any] = None) -> List[Dict[str, Any]]:
+        async def search(user_id: str, query: Optional[str] = None, filters: Optional[Dict[str, Any]] = None, query_embedding: Optional[Any] = None) -> List[Dict[str, Any]]:
             """
             搜索相关记忆，支持语义和精确查询
             
@@ -1449,12 +1456,12 @@ class GenericMCPServer:
             - 按分类过滤: filters={"jsonb_equals": {"category": "餐饮"}}
             
             Args:
-                query: 搜索查询词（可为空，用于结构化过滤）
-                user_id: 用户ID
+                user_id: 用户ID（必需）
+                query: 搜索查询词（可选，为空时使用结构化过滤）
                 filters: 过滤条件，支持各种精确匹配
                 query_embedding: 查询向量（可选，用于语义搜索）
             """
-            return await self._search(query, user_id, filters, query_embedding)
+            return await self._search(user_id, query, filters, query_embedding)
         
         @self.server.tool()
         async def aggregate(user_id: str, operation: str, field: Optional[str], filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

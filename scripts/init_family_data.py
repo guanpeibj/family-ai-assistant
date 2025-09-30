@@ -85,26 +85,28 @@ def slugify(value: Optional[str]) -> Optional[str]:
 
 
 def canonical_member_key(member: Dict[str, Any], index: int, used: set) -> str:
+    """
+    生成成员的唯一key，优先使用JSON中定义的member_key字段
+    确保幂等性：相同的输入总是生成相同的key
+    """
     candidates = [
-        member.get('member_key'),
+        member.get('member_key'),  # 最高优先级：JSON中显式定义的
         member.get('key'),
-        member.get('role'),
-        member.get('name'),
+        slugify(member.get('role')),
+        slugify(member.get('name')),
         f"member_{index + 1}",
     ]
     key: Optional[str] = None
     for candidate in candidates:
-        key = slugify(candidate)
-        if key:
-            break
+        if candidate:
+            key = slugify(candidate) if isinstance(candidate, str) else candidate
+            if key:
+                break
     if not key:
         key = f"member_{index + 1}"
 
-    original = key
-    counter = 1
-    while key in used:
-        key = f"{original}_{counter}"
-        counter += 1
+    # 不再添加后缀，保持key的稳定性
+    # 如果key已存在于数据库中，sync_members会更新而不是创建新记录
     used.add(key)
     return key
 
@@ -187,6 +189,13 @@ async def ensure_user_channel(session, channel: ChannelType, channel_user_id: st
 
 
 async def link_member_account(session, member_id: uuid.UUID, user_id: uuid.UUID, *, is_primary: bool = False, labels: Optional[Dict[str, Any]] = None) -> None:
+    # 确保用户存在于users表中
+    user_stmt = select(User).where(User.id == user_id)
+    user_exists = (await session.execute(user_stmt)).scalar_one_or_none()
+    if not user_exists:
+        session.add(User(id=user_id))
+        await session.flush()
+    
     stmt = select(FamilyMemberAccount).where(
         FamilyMemberAccount.member_id == member_id,
         FamilyMemberAccount.user_id == user_id,
@@ -268,6 +277,7 @@ async def sync_member_accounts(
     session,
     member: FamilyMember,
     account_entries: List[Dict[str, Any]],
+    member_profile: Optional[Dict[str, Any]] = None,
 ) -> bool:
     if not account_entries:
         return False
@@ -285,7 +295,7 @@ async def sync_member_accounts(
         is_primary = entry.get('is_primary')
         labels = entry.get('labels') if isinstance(entry.get('labels'), dict) else None
 
-        user_id_value = entry.get('user_id') or profile.get('user_id')
+        user_id_value = entry.get('user_id') or (member_profile.get('user_id') if member_profile else None)
         user_uuid: Optional[uuid.UUID] = None
         if user_id_value:
             try:
@@ -368,7 +378,7 @@ async def init_family_data() -> None:
                     'labels': {'source': 'legacy_threema_id'},
                 })
 
-            linked = await sync_member_accounts(session, member, account_entries)
+            linked = await sync_member_accounts(session, member, account_entries, profile)
             if linked:
                 print(f"  ↳ 绑定账号：{profile.get('name') or key} ({len(account_entries)} 条)")
 

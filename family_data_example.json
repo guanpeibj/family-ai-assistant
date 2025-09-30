@@ -263,32 +263,6 @@
   ],
   "preferences": [
     {
-      "category": "budget",
-      "target": "food",
-      "amount": 3500,
-      "currency": "CNY",
-      "priority": "high",
-      "applies_to": "household",
-      "automation": {
-        "alert_if_spend_ratio_exceeds": 0.8,
-        "notify_member_keys": ["dad", "mom"],
-        "suggest_meal_plan": true
-      },
-      "notes": "保证早餐营养、晚餐少油少盐。"
-    },
-    {
-      "category": "budget",
-      "target": "education",
-      "amount": 2500,
-      "currency": "CNY",
-      "priority": "high",
-      "applies_to": ["daughter_1", "son"],
-      "automation": {
-        "highlight_upcoming_fees": true,
-        "remind_days_before": 7
-      }
-    },
-    {
       "category": "health_tracking",
       "metrics": [
         {"name": "height", "unit": "cm"},
@@ -410,15 +384,17 @@
   },
   "budget": {
     "currency": "CNY",
+    "monthly_total": 11500,
     "monthly_categories": {
-      "food": 3500,
-      "education": 2500,
-      "healthcare": 1200,
-      "utilities": 900,
-      "transportation": 700,
-      "entertainment": 600,
-      "household": 500,
-      "emergency": 1500
+      "餐饮": 3500,
+      "交通": 700,
+      "医疗": 1200,
+      "教育": 2500,
+      "娱乐": 600,
+      "居住": 900,
+      "服饰": 500,
+      "日用": 500,
+      "其他": 1100
     },
     "annual_goals": {
       "education_fund": 60000,

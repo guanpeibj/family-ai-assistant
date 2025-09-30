@@ -78,7 +78,10 @@ async def call_tool(tool_name: str, request: Dict[str, Any]):
         # 仅保留目标处理函数签名中声明的参数，忽略诸如 trace_id 等多余字段
         try:
             sig = inspect.signature(handler)
+            # 排除self参数（绑定方法的第一个参数）
             allowed = set(sig.parameters.keys())
+            if 'self' in allowed:
+                allowed.remove('self')
             filtered_args = {k: v for k, v in (request or {}).items() if k in allowed}
         except Exception:
             filtered_args = request or {}

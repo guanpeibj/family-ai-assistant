@@ -42,6 +42,118 @@ async def reminder_task():
         await asyncio.sleep(60)
 
 
+async def financial_analysis_task():
+    """月度财务分析任务
+    
+    功能：
+    - 每天00:05检查是否为月初第一天
+    - 如果是，为所有活跃用户生成上月财务分析报告
+    - 通过 Threema 发送报告
+    
+    设计理念：
+    - AI主导：报告内容完全由AI根据数据生成
+    - 简单直接：只提供触发机制，不预设报告格式
+    - 保持泛化：可以扩展为周报、季报等
+    """
+    from datetime import datetime, timedelta
+    
+    # 等待启动后的初始延迟（避免启动时立即执行）
+    await asyncio.sleep(60)
+    
+    last_check_date = None  # 记录上次检查的日期，避免重复执行
+    
+    while True:
+        try:
+            now = datetime.now()
+            today = now.date()
+            
+            # 检查是否为月初第一天（且未执行过）
+            is_first_day = now.day == 1
+            not_checked_today = last_check_date != today
+            is_morning = now.hour == 0 and now.minute < 10  # 凌晨00:00-00:10之间
+            
+            if is_first_day and not_checked_today and is_morning:
+                logger.info(
+                    "financial_analysis.trigger",
+                    date=today.isoformat(),
+                    time=now.strftime("%H:%M")
+                )
+                
+                # 标记为已检查
+                last_check_date = today
+                
+                # 获取所有活跃用户
+                active_users = await ai_engine._get_all_active_users()
+                
+                if not active_users:
+                    logger.warning("financial_analysis.no_users")
+                else:
+                    # 计算上月日期范围
+                    last_month = now.replace(day=1) - timedelta(days=1)
+                    month_start = last_month.replace(day=1)
+                    month_str = last_month.strftime("%Y年%m月")
+                    
+                    logger.info(
+                        "financial_analysis.start",
+                        month=month_str,
+                        users_count=len(active_users)
+                    )
+                    
+                    # 为每个用户生成报告
+                    for user_id in active_users:
+                        try:
+                            # 构造分析请求（让AI自主生成报告）
+                            analysis_request = f"请生成{month_str}的财务分析报告，包括收支总览、分类明细、异常提醒和改进建议"
+                            
+                            # 调用AI引擎生成报告
+                            report = await ai_engine.process_message(
+                                content=analysis_request,
+                                user_id=str(user_id),
+                                context={
+                                    "channel": "system",
+                                    "thread_id": f"financial_report_{last_month.strftime('%Y%m')}",
+                                    "auto_analysis": True
+                                }
+                            )
+                            
+                            # 发送报告
+                            if report and len(report.strip()) > 10:
+                                await send_to_threema_user(str(user_id), report)
+                                
+                                logger.info(
+                                    "financial_analysis.sent",
+                                    user_id=str(user_id),
+                                    month=month_str,
+                                    report_length=len(report)
+                                )
+                            else:
+                                logger.warning(
+                                    "financial_analysis.empty_report",
+                                    user_id=str(user_id),
+                                    month=month_str
+                                )
+                        
+                        except Exception as e:
+                            logger.error(
+                                "financial_analysis.user_failed",
+                                user_id=str(user_id),
+                                month=month_str,
+                                error=str(e)
+                            )
+                    
+                    logger.info(
+                        "financial_analysis.complete",
+                        month=month_str,
+                        users_count=len(active_users)
+                    )
+            
+        except Exception as e:
+            logger.error("financial_analysis.task_error", error=str(e))
+        
+        # 每5分钟检查一次（避免错过时间窗口）
+        await asyncio.sleep(300)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
@@ -58,6 +170,10 @@ async def lifespan(app: FastAPI):
     
     # 启动后台任务
     reminder_task_handle = asyncio.create_task(reminder_task())
+    financial_task_handle = asyncio.create_task(financial_analysis_task())
+    
+    logger.info("background_tasks.started", 
+                tasks=["reminder_task", "financial_analysis_task"])
     
     yield
     
@@ -66,10 +182,19 @@ async def lifespan(app: FastAPI):
     
     # 取消后台任务
     reminder_task_handle.cancel()
+    financial_task_handle.cancel()
+    
     try:
         await reminder_task_handle
     except asyncio.CancelledError:
         pass
+    
+    try:
+        await financial_task_handle
+    except asyncio.CancelledError:
+        pass
+    
+    logger.info("background_tasks.stopped")
     
     # 关闭AI引擎
     await shutdown_ai_engine()

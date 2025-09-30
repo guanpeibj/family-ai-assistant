@@ -293,8 +293,22 @@ class ContextManager:
                     except (ValueError, TypeError):
                         limit = 20
                     filters['limit'] = limit
-                    if thread_id and 'thread_id' not in filters:
+                    
+                    # 智能判断是否需要添加thread_id：
+                    # 全局数据（budget、family_profile等）不应有thread_id限制
+                    # 只有用户交互数据（expense、chat_turn等）才需要thread_id隔离
+                    data_type = filters.get('type', '')
+                    GLOBAL_DATA_TYPES = {
+                        'budget', 'family_profile', 'family_member_profile',
+                        'family_important_info', 'family_preference', 'family_contact',
+                        'calendar_event'
+                    }
+                    
+                    # 只有当：1) thread_id存在 2) filters中没有显式指定thread_id 
+                    # 3) 数据类型不是全局类型时，才自动添加thread_id
+                    if thread_id and 'thread_id' not in filters and data_type not in GLOBAL_DATA_TYPES:
                         filters['thread_id'] = thread_id
+                    
                     if shared_thread:
                         filters['shared_thread'] = True
                     
@@ -623,7 +637,13 @@ class ToolExecutor:
         output_type = await self.capability_analyzer.get_output_type(
             tool_name, self.ai_engine._http_client, self.ai_engine.mcp_url
         )
-        if output_type == 'entity_with_id' and 'ai_data' in args:
+        if output_type == 'entity_with_id':
+            # 确保存储工具总是有必需的参数
+            if 'content' not in args:
+                # 使用原始内容作为 fallback
+                args['content'] = understanding.get('original_content', '')
+            
+            # 确保存储工具总是有 ai_data 参数
             ai_data = args.get('ai_data', {})
             entities = understanding.get('entities', {})
             merged = {**entities, **ai_data}
@@ -1335,7 +1355,9 @@ class AIEngineV2:
             if min_expected:
                 actual_count = sum(
                     1 for action in results.get('actions_taken', [])
-                    if isinstance(action, dict) and action.get('result', {}).get('success')
+                    if (isinstance(action, dict) and 
+                        isinstance(action.get('result'), dict) and 
+                        action.get('result', {}).get('success'))
                 )
                 if actual_count < min_expected:
                     logger.info(
@@ -1347,10 +1369,17 @@ class AIEngineV2:
                     return True  # 需要补充
             
             # 检查是否有失败的操作
-            failed_actions = [
-                action for action in results.get('actions_taken', [])
-                if isinstance(action, dict) and not action.get('result', {}).get('success')
-            ]
+            failed_actions = []
+            for action in results.get('actions_taken', []):
+                if not isinstance(action, dict):
+                    continue
+                result = action.get('result')
+                if isinstance(result, dict):
+                    if not result.get('success'):
+                        failed_actions.append(action)
+                else:
+                    # result 不是字典，视为失败
+                    failed_actions.append(action)
             
             if failed_actions and verification_config.get('retry_on_failure'):
                 logger.info(
@@ -1364,9 +1393,13 @@ class AIEngineV2:
             thinking_depth = understanding.get('thinking_depth', 0)
             if thinking_depth >= 2:  # 复杂问题
                 # 检查是否有足够的数据支持分析
-                total_results = len(results.get('actions_taken', []))
-                if total_results < 2:  # 复杂问题至少需要2个数据源
-                    return True
+                if isinstance(results, dict):
+                    total_results = len(results.get('actions_taken', []))
+                    if total_results < 2:  # 复杂问题至少需要2个数据源
+                        return True
+                else:
+                    # results不是预期的dict格式，跳过验证
+                    return False
             
             return False  # 结果满意
             
