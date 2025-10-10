@@ -59,6 +59,8 @@ services:
       - ./src:/app/src
       - ./scripts:/app/scripts
       - ./examples:/app/examples
+      - ./tests:/app/tests
+      - ./data:/app/data
       - ./prompts:/app/prompts
       - ./alembic:/app/alembic
       - ./family_private_data.json:/app/family_private_data.json:ro

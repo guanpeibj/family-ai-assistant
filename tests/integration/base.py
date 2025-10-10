@@ -16,7 +16,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.ai_engine import ai_engine
-from src.db.database import async_session
+from src.db.database import get_session
 from src.db.models import Memory, User, Reminder, Interaction
 from sqlalchemy import select, delete
 
@@ -61,8 +61,8 @@ class IntegrationTestBase:
         logger.info("test_setup_start", suite=self.test_suite_name)
         
         try:
-            # 初始化AI引擎
-            if not ai_engine._mcp_initialized:
+            # 初始化AI引擎（如果尚未初始化）
+            if ai_engine.mcp_client is None:
                 await ai_engine.initialize_mcp()
             
             # 清理旧的测试数据
@@ -107,7 +107,7 @@ class IntegrationTestBase:
         注意：不删除Users表，因为可能有外键约束
         """
         try:
-            async with async_session() as session:
+            async with get_session() as session:
                 # 获取所有测试用户ID
                 result = await session.execute(
                     select(User.id).where(User.id.like(f"{self.TEST_USER_PREFIX}%"))
@@ -130,7 +130,7 @@ class IntegrationTestBase:
                         delete(Interaction).where(Interaction.user_id.in_(test_user_ids))
                     )
                     
-                    await session.commit()
+                    # get_session已经自动提交，无需手动commit
                     
                     logger.info("test_data_cleanup_complete", 
                               user_count=len(test_user_ids),
@@ -271,7 +271,7 @@ class IntegrationTestBase:
             (success, message) 元组
         """
         try:
-            async with async_session() as session:
+            async with get_session() as session:
                 query = select(Memory).where(Memory.user_id == self.test_user_id)
                 
                 # 应用JSONB过滤
@@ -307,7 +307,7 @@ class IntegrationTestBase:
             Memory对象或None
         """
         try:
-            async with async_session() as session:
+            async with get_session() as session:
                 query = select(Memory).where(
                     Memory.user_id == self.test_user_id
                 ).order_by(Memory.created_at.desc())

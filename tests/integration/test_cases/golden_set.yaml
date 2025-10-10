@@ -1,0 +1,704 @@
+# FAA 黄金测试集
+# 
+# 这是用于AB测试和模型对比的标准测试集
+# 共50个最具代表性的测试用例
+#
+# 原则：
+# 1. 覆盖readme.MD中所有主要场景
+# 2. 平衡简单/中等/复杂难度
+# 3. 包含关键边界情况
+
+test_suite_name: "golden_set"
+test_suite_version: "1.0"
+total_cases: 50
+
+# ===== 分类1：基础记账 (10个) =====
+accounting_basic:
+  - test_id: "TC001"
+    test_name: "简单记账-完整信息"
+    priority: "P0"
+    difficulty: "simple"
+    user_input: "今天买菜花了80元"
+    expected_behavior:
+      intent: "记录支出"
+      key_actions: ["存储账目", "识别类目为餐饮", "记录金额80元"]
+      response_should: "确认记账成功，告知类目和金额"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "expense"
+        amount: 80.0
+        category: "餐饮"
+        occurred_at: "today"
+      tolerance:
+        amount: 0
+        category: ["餐饮", "食品"]
+      required_fields: ["type", "category", "amount"]
+    
+  - test_id: "TC002"
+    test_name: "大额支出记录"
+    priority: "P0"
+    difficulty: "simple"
+    user_input: "买了台电脑3500元"
+    expected_behavior:
+      intent: "记录大额支出"
+      key_actions: ["存储账目", "识别类目", "记录金额"]
+      response_should: "确认记账，可能提示大额"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "expense"
+        amount: 3500.0
+        occurred_at: "today"
+      tolerance:
+        amount: 0
+
+  - test_id: "TC003"
+    test_name: "收入记录"
+    priority: "P0"
+    difficulty: "simple"
+    user_input: "今天发工资10000元"
+    expected_behavior:
+      intent: "记录收入"
+      key_actions: ["存储收入记录", "记录金额"]
+      response_should: "确认收入记录成功"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "income"
+        amount: 10000.0
+        occurred_at: "today"
+
+  - test_id: "TC004"
+    test_name: "跨月记账"
+    priority: "P0"
+    difficulty: "medium"
+    user_input: "记一下，上个月28号买了礼物200元"
+    expected_behavior:
+      intent: "记录历史支出"
+      key_actions: ["存储账目", "正确识别时间为上月28号"]
+      response_should: "确认记录历史账目"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "expense"
+        amount: 200.0
+        occurred_at: "last_month_28"
+
+  - test_id: "TC005"
+    test_name: "类目映射-餐饮"
+    priority: "P0"
+    difficulty: "simple"
+    user_input: "外卖花了45元"
+    expected_behavior:
+      intent: "记录餐饮支出"
+      key_actions: ["识别为餐饮类"]
+      response_should: "确认记账"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "expense"
+        category: "餐饮"
+
+  - test_id: "TC006"
+    test_name: "类目映射-交通"
+    priority: "P0"
+    difficulty: "simple"
+    user_input: "打车去医院35元"
+    expected_behavior:
+      intent: "记录交通支出"
+      key_actions: ["识别为交通类"]
+      response_should: "确认记账"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "expense"
+        category: "交通"
+
+  - test_id: "TC007"
+    test_name: "类目映射-医疗"
+    priority: "P0"
+    difficulty: "simple"
+    user_input: "买感冒药120元"
+    expected_behavior:
+      intent: "记录医疗支出"
+      key_actions: ["识别为医疗类"]
+      response_should: "确认记账"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "expense"
+        category: "医疗"
+
+  - test_id: "TC008"
+    test_name: "类目映射-教育"
+    priority: "P0"
+    difficulty: "simple"
+    user_input: "孩子钢琴课200元"
+    expected_behavior:
+      intent: "记录教育支出"
+      key_actions: ["识别为教育类"]
+      response_should: "确认记账"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "expense"
+        category: "教育"
+
+  - test_id: "TC009"
+    test_name: "类目映射-居住"
+    priority: "P0"
+    difficulty: "simple"
+    user_input: "交物业费500元"
+    expected_behavior:
+      intent: "记录居住支出"
+      key_actions: ["识别为居住类"]
+      response_should: "确认记账"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "expense"
+        category: "居住"
+
+  - test_id: "TC010"
+    test_name: "类目映射-日用"
+    priority: "P0"
+    difficulty: "simple"
+    user_input: "买洗发水35元"
+    expected_behavior:
+      intent: "记录日用支出"
+      key_actions: ["识别为日用类"]
+      response_should: "确认记账"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "expense"
+        category: "日用"
+
+# ===== 分类2：查询功能 (10个) =====
+query_basic:
+  - test_id: "TC011"
+    test_name: "本月支出查询"
+    priority: "P0"
+    difficulty: "medium"
+    user_input: "这个月一共花了多少钱？"
+    expected_behavior:
+      intent: "查询本月总支出"
+      key_actions: ["查询本月记录", "计算总额", "回复结果"]
+      response_should: "给出本月总支出金额"
+    data_verification:
+      should_store: false
+    
+  - test_id: "TC012"
+    test_name: "类目支出查询"
+    priority: "P0"
+    difficulty: "medium"
+    user_input: "这个月餐饮花了多少？"
+    expected_behavior:
+      intent: "查询特定类目支出"
+      key_actions: ["过滤餐饮类目", "计算总额"]
+      response_should: "给出餐饮类支出金额"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC013"
+    test_name: "最近支出查询"
+    priority: "P0"
+    difficulty: "medium"
+    user_input: "最近3天花了多少钱？"
+    expected_behavior:
+      intent: "查询最近支出"
+      key_actions: ["查询最近3天", "计算总额"]
+      response_should: "给出最近3天支出金额"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC014"
+    test_name: "预算查询"
+    priority: "P0"
+    difficulty: "medium"
+    user_input: "这个月预算还剩多少？"
+    expected_behavior:
+      intent: "查询预算剩余"
+      key_actions: ["查询预算设置", "计算已用金额", "计算剩余"]
+      response_should: "告知预算剩余金额和百分比"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC015"
+    test_name: "月度对比查询"
+    priority: "P1"
+    difficulty: "complex"
+    user_input: "这个月比上个月多花了多少？"
+    expected_behavior:
+      intent: "对比两个月支出"
+      key_actions: ["查询本月", "查询上月", "计算差值"]
+      response_should: "给出差值和百分比变化"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC016"
+    test_name: "类目排名查询"
+    priority: "P1"
+    difficulty: "complex"
+    user_input: "这个月哪个类目花得最多？"
+    expected_behavior:
+      intent: "查询支出排名"
+      key_actions: ["按类目聚合", "排序", "给出前几名"]
+      response_should: "列出支出最多的类目和金额"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC017"
+    test_name: "趋势查询"
+    priority: "P1"
+    difficulty: "complex"
+    user_input: "近三个月餐饮支出趋势"
+    expected_behavior:
+      intent: "查询支出趋势"
+      key_actions: ["查询3个月数据", "按月聚合", "分析趋势"]
+      response_should: "给出每月金额和趋势分析"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC018"
+    test_name: "昨天支出查询"
+    priority: "P0"
+    difficulty: "simple"
+    user_input: "昨天一共花了多少？"
+    expected_behavior:
+      intent: "查询昨日支出"
+      key_actions: ["查询昨天记录", "计算总额"]
+      response_should: "给出昨天总支出"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC019"
+    test_name: "单笔查询"
+    priority: "P0"
+    difficulty: "medium"
+    user_input: "我今天买菜花了多少来着？"
+    expected_behavior:
+      intent: "查询特定记录"
+      key_actions: ["搜索今天的买菜记录", "返回金额"]
+      response_should: "告知买菜花费金额"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC020"
+    test_name: "收支总览查询"
+    priority: "P1"
+    difficulty: "medium"
+    user_input: "这个月收支情况怎么样？"
+    expected_behavior:
+      intent: "查询收支总览"
+      key_actions: ["查询收入", "查询支出", "计算结余"]
+      response_should: "给出收入、支出、结余"
+    data_verification:
+      should_store: false
+
+# ===== 分类3：提醒功能 (5个) =====
+reminder:
+  - test_id: "TC021"
+    test_name: "创建单次提醒"
+    priority: "P0"
+    difficulty: "simple"
+    user_input: "下周一提醒我交电费"
+    expected_behavior:
+      intent: "创建提醒"
+      key_actions: ["解析时间为下周一", "创建提醒任务"]
+      response_should: "确认提醒已设置"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "reminder_request"
+
+  - test_id: "TC022"
+    test_name: "创建重复提醒"
+    priority: "P0"
+    difficulty: "medium"
+    user_input: "每天早上7点提醒我给孩子吃维生素"
+    expected_behavior:
+      intent: "创建重复提醒"
+      key_actions: ["识别重复模式", "创建重复提醒"]
+      response_should: "确认重复提醒已设置"
+    data_verification:
+      should_store: true
+
+  - test_id: "TC023"
+    test_name: "查询提醒"
+    priority: "P0"
+    difficulty: "simple"
+    user_input: "我设了哪些提醒？"
+    expected_behavior:
+      intent: "查询提醒列表"
+      key_actions: ["查询所有未完成提醒", "列出提醒"]
+      response_should: "列出所有待办提醒"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC024"
+    test_name: "取消提醒"
+    priority: "P1"
+    difficulty: "medium"
+    user_input: "取消下周一交电费的提醒"
+    expected_behavior:
+      intent: "取消特定提醒"
+      key_actions: ["搜索匹配的提醒", "标记为取消"]
+      response_should: "确认提醒已取消"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC025"
+    test_name: "延期提醒"
+    priority: "P1"
+    difficulty: "medium"
+    user_input: "把交电费的提醒改到后天"
+    expected_behavior:
+      intent: "修改提醒时间"
+      key_actions: ["找到提醒", "更新时间"]
+      response_should: "确认提醒时间已更新"
+    data_verification:
+      should_store: false
+
+# ===== 分类4：健康记录 (5个) =====
+health:
+  - test_id: "TC026"
+    test_name: "身高记录"
+    priority: "P0"
+    difficulty: "simple"
+    user_input: "儿子今天身高90cm"
+    expected_behavior:
+      intent: "记录身高"
+      key_actions: ["识别家庭成员", "记录身高数据"]
+      response_should: "确认身高记录成功"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "health"
+        metric: "height"
+        value: 90
+
+  - test_id: "TC027"
+    test_name: "体重记录"
+    priority: "P0"
+    difficulty: "simple"
+    user_input: "大女儿体重25公斤"
+    expected_behavior:
+      intent: "记录体重"
+      key_actions: ["识别家庭成员", "记录体重数据"]
+      response_should: "确认体重记录成功"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "health"
+        metric: "weight"
+        value: 25
+
+  - test_id: "TC028"
+    test_name: "健康查询"
+    priority: "P0"
+    difficulty: "medium"
+    user_input: "儿子最近身高体重变化"
+    expected_behavior:
+      intent: "查询健康趋势"
+      key_actions: ["查询历史记录", "分析趋势"]
+      response_should: "给出身高体重变化情况"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC029"
+    test_name: "疫苗记录"
+    priority: "P1"
+    difficulty: "medium"
+    user_input: "二女儿今天打了流感疫苗"
+    expected_behavior:
+      intent: "记录疫苗"
+      key_actions: ["识别成员", "记录疫苗信息"]
+      response_should: "确认疫苗记录，可能询问下次时间"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "health"
+        category: "vaccine"
+
+  - test_id: "TC030"
+    test_name: "就医记录"
+    priority: "P1"
+    difficulty: "medium"
+    user_input: "大女儿今天看医生，诊断是感冒"
+    expected_behavior:
+      intent: "记录就医"
+      key_actions: ["识别成员", "记录诊断信息"]
+      response_should: "确认就医记录"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "health"
+        category: "medical_visit"
+
+# ===== 分类5：预算管理 (5个) =====
+budget:
+  - test_id: "TC031"
+    test_name: "设置月度预算"
+    priority: "P0"
+    difficulty: "medium"
+    user_input: "设置本月预算10000元"
+    expected_behavior:
+      intent: "设置预算"
+      key_actions: ["保存预算设置"]
+      response_should: "确认预算已设置"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "budget_setting"
+        amount: 10000
+
+  - test_id: "TC032"
+    test_name: "设置分类预算"
+    priority: "P0"
+    difficulty: "complex"
+    user_input: "本月预算：餐饮3000、交通1000、教育2000"
+    expected_behavior:
+      intent: "设置分类预算"
+      key_actions: ["解析多个类目", "保存各类预算"]
+      response_should: "确认各类目预算已设置"
+    data_verification:
+      should_store: true
+
+  - test_id: "TC033"
+    test_name: "预算警告"
+    priority: "P1"
+    difficulty: "medium"
+    user_input: "本月预算使用情况"
+    expected_behavior:
+      intent: "查询预算状态"
+      key_actions: ["计算已用百分比", "判断是否需要警告"]
+      response_should: "告知预算使用情况，超标时警告"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC034"
+    test_name: "修改预算"
+    priority: "P1"
+    difficulty: "medium"
+    user_input: "把本月预算改为12000元"
+    expected_behavior:
+      intent: "修改预算"
+      key_actions: ["更新预算设置"]
+      response_should: "确认预算已更新"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC035"
+    test_name: "预算建议"
+    priority: "P1"
+    difficulty: "complex"
+    user_input: "下个月预算应该怎么设置？"
+    expected_behavior:
+      intent: "预算建议"
+      key_actions: ["分析历史数据", "给出建议"]
+      response_should: "基于历史数据给出预算建议"
+    data_verification:
+      should_store: false
+
+# ===== 分类6：信息管理 (5个) =====
+information:
+  - test_id: "TC036"
+    test_name: "存储信息"
+    priority: "P0"
+    difficulty: "simple"
+    user_input: "帮我记一下，大门钥匙放在沙发垫子下面"
+    expected_behavior:
+      intent: "存储信息"
+      key_actions: ["保存信息"]
+      response_should: "确认信息已记录"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "info"
+
+  - test_id: "TC037"
+    test_name: "更新信息"
+    priority: "P0"
+    difficulty: "medium"
+    user_input: "大门钥匙现在放到衣柜上面了"
+    expected_behavior:
+      intent: "更新已有信息"
+      key_actions: ["识别需要更新", "更新信息"]
+      response_should: "确认信息已更新"
+    data_verification:
+      should_store: true
+
+  - test_id: "TC038"
+    test_name: "查询信息"
+    priority: "P0"
+    difficulty: "simple"
+    user_input: "大门钥匙放哪儿了？"
+    expected_behavior:
+      intent: "查询信息"
+      key_actions: ["搜索相关信息", "返回结果"]
+      response_should: "告知钥匙位置"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC039"
+    test_name: "密码管理"
+    priority: "P1"
+    difficulty: "simple"
+    user_input: "我家wifi密码是12345678"
+    expected_behavior:
+      intent: "存储密码"
+      key_actions: ["安全存储密码信息"]
+      response_should: "确认密码已记录"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "info"
+        category: "password"
+
+  - test_id: "TC040"
+    test_name: "日程记录"
+    priority: "P1"
+    difficulty: "medium"
+    user_input: "大女儿下周三学校开家长会"
+    expected_behavior:
+      intent: "记录日程"
+      key_actions: ["识别时间和事件", "记录日程"]
+      response_should: "确认日程已记录，可能询问是否需要提醒"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "schedule"
+
+# ===== 分类7：澄清对话 (5个) =====
+clarification:
+  - test_id: "TC041"
+    test_name: "缺少金额澄清"
+    priority: "P0"
+    difficulty: "medium"
+    user_input: "买了衣服"
+    expected_behavior:
+      intent: "记账但信息不完整"
+      key_actions: ["识别缺少金额", "发起澄清"]
+      response_should: "询问金额"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC042"
+    test_name: "缺少对象澄清"
+    priority: "P0"
+    difficulty: "medium"
+    user_input: "给孩子买了书100元"
+    expected_behavior:
+      intent: "记账但缺少具体对象"
+      key_actions: ["识别缺少具体孩子", "发起澄清"]
+      response_should: "询问是哪个孩子"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC043"
+    test_name: "缺少时间澄清"
+    priority: "P1"
+    difficulty: "medium"
+    user_input: "下次提醒我交电费"
+    expected_behavior:
+      intent: "创建提醒但时间不明确"
+      key_actions: ["识别缺少具体时间", "询问时间"]
+      response_should: "询问具体时间"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC044"
+    test_name: "歧义澄清"
+    priority: "P1"
+    difficulty: "complex"
+    user_input: "上次买菜花了多少？"
+    expected_behavior:
+      intent: "查询但'上次'不明确"
+      key_actions: ["识别歧义", "询问具体是哪次"]
+      response_should: "询问具体时间或提供最近记录让用户确认"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC045"
+    test_name: "多轮澄清"
+    priority: "P1"
+    difficulty: "complex"
+    user_input: "记账"
+    expected_behavior:
+      intent: "记账但信息极度不完整"
+      key_actions: ["识别需要多个信息", "逐步澄清"]
+      response_should: "询问必要信息（金额、类目等）"
+    data_verification:
+      should_store: false
+
+# ===== 分类8：边界情况 (5个) =====
+edge_cases:
+  - test_id: "TC046"
+    test_name: "零元记录"
+    priority: "P2"
+    difficulty: "simple"
+    user_input: "今天用优惠券，午餐花了0元"
+    expected_behavior:
+      intent: "记录零元支出"
+      key_actions: ["接受0元记录"]
+      response_should: "确认记录"
+    data_verification:
+      should_store: true
+      expected_data:
+        amount: 0
+
+  - test_id: "TC047"
+    test_name: "负数处理"
+    priority: "P2"
+    difficulty: "medium"
+    user_input: "退货，退了50元"
+    expected_behavior:
+      intent: "记录退款"
+      key_actions: ["识别为退款或负支出"]
+      response_should: "确认退款记录"
+    data_verification:
+      should_store: true
+
+  - test_id: "TC048"
+    test_name: "无关对话"
+    priority: "P2"
+    difficulty: "simple"
+    user_input: "今天天气真好"
+    expected_behavior:
+      intent: "闲聊"
+      key_actions: ["识别为无业务意图", "礼貌回应"]
+      response_should: "礼貌回应，不执行业务操作"
+    data_verification:
+      should_store: false
+
+  - test_id: "TC049"
+    test_name: "模糊金额"
+    priority: "P2"
+    difficulty: "medium"
+    user_input: "买菜大概花了八十多块钱"
+    expected_behavior:
+      intent: "记账但金额模糊"
+      key_actions: ["识别模糊金额", "可能使用中间值或询问"]
+      response_should: "确认记录或询问准确金额"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "expense"
+
+  - test_id: "TC050"
+    test_name: "超长输入"
+    priority: "P2"
+    difficulty: "medium"
+    user_input: "今天去超市买了很多东西，有牛奶、面包、鸡蛋、蔬菜、水果、零食等等，一共花了280元，用的是支付宝支付，还用了10元优惠券"
+    expected_behavior:
+      intent: "记账但信息冗长"
+      key_actions: ["提取核心信息", "记录账目"]
+      response_should: "确认记录核心信息"
+    data_verification:
+      should_store: true
+      expected_data:
+        type: "expense"
+        amount: 280
+

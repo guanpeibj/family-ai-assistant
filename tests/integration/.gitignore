@@ -1,0 +1,13 @@
+# 测试报告（本地生成，不提交）
+reports/
+
+# Python缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 测试临时文件
+*.log
+.pytest_cache/
+
