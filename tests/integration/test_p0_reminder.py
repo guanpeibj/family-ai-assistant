@@ -2,7 +2,7 @@
 """
 P0 集成测试 - 基础提醒功能
 
-测试用例：TC038 - TC041
+测试用例：TC081 - TC084
 优先级：P0（核心必测）
 
 功能覆盖：
@@ -23,9 +23,9 @@ class TestP0Reminder(IntegrationTestBase):
     def __init__(self):
         super().__init__(test_suite_name="p0_reminder")
     
-    async def test_tc038_single_reminder(self):
+    async def test_tc081_single_reminder(self):
         """
-        TC038: 设置单次提醒
+        TC081: 设置单次提醒
         
         验证点：
         1. AI理解提醒设置意图
@@ -35,7 +35,7 @@ class TestP0Reminder(IntegrationTestBase):
         5. remind_at设置正确
         """
         await self.run_test(
-            test_id="TC038",
+            test_id="TC081",
             test_name="设置单次提醒",
             message="提醒我明天下午3点接孩子放学",
             expected_keywords=["提醒", "明天", "3点"]
@@ -43,9 +43,9 @@ class TestP0Reminder(IntegrationTestBase):
         
         # 注：验证remind_at的精确时间需要查询reminders表
     
-    async def test_tc039_advance_reminder(self):
+    async def test_tc082_advance_reminder(self):
         """
-        TC040: 设置提前提醒
+        TC082: 设置提前提醒
         
         验证点：
         1. AI理解"提前一天提醒"的含义
@@ -54,15 +54,15 @@ class TestP0Reminder(IntegrationTestBase):
         4. remind_at = 下周二（下周三-1天）
         """
         await self.run_test(
-            test_id="TC040",
+            test_id="TC082",
             test_name="设置提前提醒",
             message="下周三给二女儿打疫苗，提前一天提醒我",
             expected_keywords=["提醒", "疫苗"]
         )
     
-    async def test_tc041_reminder_missing_person(self):
+    async def test_tc083_reminder_missing_person(self):
         """
-        TC041: 提醒 - 缺少人员（澄清）
+        TC083: 提醒 - 缺少人员（澄清）
         
         验证点：
         1. AI识别涉及"孩子"但未指定具体人员
@@ -70,15 +70,15 @@ class TestP0Reminder(IntegrationTestBase):
         3. 可能提供成员列表
         """
         await self.run_test(
-            test_id="TC041",
+            test_id="TC083",
             test_name="提醒 - 缺少人员（澄清）",
             message="提醒我下个月3号给孩子打疫苗",
             expected_keywords=["哪个", "孩子", "谁"]
         )
     
-    async def test_tc042_reminder_missing_time(self):
+    async def test_tc084_reminder_missing_time(self):
         """
-        TC042: 提醒 - 缺少时间（澄清）
+        TC084: 提醒 - 缺少时间（澄清）
         
         验证点：
         1. AI识别缺少具体时间
@@ -86,7 +86,7 @@ class TestP0Reminder(IntegrationTestBase):
         3. 询问"什么时候"或"几点"
         """
         await self.run_test(
-            test_id="TC042",
+            test_id="TC084",
             test_name="提醒 - 缺少时间（澄清）",
             message="提醒我给儿子打疫苗",
             expected_keywords=["什么时候", "时间", "几点", "哪天"]
@@ -109,16 +109,16 @@ async def main():
     
     try:
         # 运行所有测试
-        await tester.test_tc038_single_reminder()
+        await tester.test_tc081_single_reminder()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc039_advance_reminder()
+        await tester.test_tc082_advance_reminder()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc041_reminder_missing_person()
+        await tester.test_tc083_reminder_missing_person()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc042_reminder_missing_time()
+        await tester.test_tc084_reminder_missing_time()
         
         # 打印总结
         tester.print_summary()

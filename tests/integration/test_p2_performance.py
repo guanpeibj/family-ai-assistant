@@ -2,7 +2,7 @@
 """
 P2 集成测试 - 性能测试
 
-测试用例：TC105
+测试用例：TC461
 优先级：P2（增强功能）
 
 功能覆盖：
@@ -43,9 +43,9 @@ class TestP2Performance(IntegrationTestBase):
         print("--- 数据准备完成 ---\n")
         await asyncio.sleep(0.5)
     
-    async def test_tc105_complex_analysis_performance(self):
+    async def test_tc461_complex_analysis_performance(self):
         """
-        TC105: 复杂分析响应时间
+        TC461: 复杂分析响应时间
         
         验证点：
         1. 执行复杂的财务分析
@@ -62,7 +62,7 @@ class TestP2Performance(IntegrationTestBase):
         start_time = datetime.now()
         
         result = await self.run_test(
-            test_id="TC105",
+            test_id="TC461",
             test_name="复杂分析响应时间",
             message="分析最近半年的财务状况并给出建议",
             expected_keywords=["财务", "支出"]
@@ -107,7 +107,7 @@ async def main():
         return 1
     
     try:
-        await tester.test_tc105_complex_analysis_performance()
+        await tester.test_tc461_complex_analysis_performance()
         
         tester.print_summary()
         return 0

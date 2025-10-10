@@ -2,7 +2,7 @@
 """
 P1 集成测试 - 复杂查询能力
 
-测试用例：TC074 - TC077
+测试用例：TC301 - TC304
 优先级：P1（重要功能）
 
 功能覆盖：
@@ -49,9 +49,9 @@ class TestP1ComplexQuery(IntegrationTestBase):
         print("--- 数据准备完成 ---\n")
         await asyncio.sleep(0.5)
     
-    async def test_tc074_multi_dimension_query(self):
+    async def test_tc301_multi_dimension_query(self):
         """
-        TC074: 多维度组合查询
+        TC301: 多维度组合查询
         
         验证点：
         1. 时间范围：最近三个月
@@ -63,15 +63,15 @@ class TestP1ComplexQuery(IntegrationTestBase):
         await self._prepare_complex_data()
         
         await self.run_test(
-            test_id="TC074",
+            test_id="TC301",
             test_name="多维度组合查询",
             message="最近三个月给孩子们在教育方面花了多少钱？",
             expected_keywords=["教育", "孩子"]
         )
     
-    async def test_tc075_trend_comparison_analysis(self):
+    async def test_tc302_trend_comparison_analysis(self):
         """
-        TC075: 趋势对比分析
+        TC302: 趋势对比分析
         
         验证点：
         1. 获取多月数据
@@ -81,15 +81,15 @@ class TestP1ComplexQuery(IntegrationTestBase):
         5. 给出有价值的洞察
         """
         await self.run_test(
-            test_id="TC075",
+            test_id="TC302",
             test_name="趋势对比分析",
             message="最近三个月餐饮支出是增加还是减少？为什么？",
             expected_keywords=["餐饮", "趋势"]
         )
     
-    async def test_tc076_hypothetical_query(self):
+    async def test_tc303_hypothetical_query(self):
         """
-        TC076: 假设性查询
+        TC303: 假设性查询
         
         验证点：
         1. 理解假设性问题
@@ -99,15 +99,15 @@ class TestP1ComplexQuery(IntegrationTestBase):
         5. 考虑多个类目调整
         """
         await self.run_test(
-            test_id="TC076",
+            test_id="TC303",
             test_name="假设性查询",
             message="如果下个月预算只有8000，我该怎么调整？",
             expected_keywords=["预算", "建议", "调整"]
         )
     
-    async def test_tc077_inference_query(self):
+    async def test_tc304_inference_query(self):
         """
-        TC077: 推理性查询
+        TC304: 推理性查询
         
         验证点：
         1. 理解需要推理的问题
@@ -117,7 +117,7 @@ class TestP1ComplexQuery(IntegrationTestBase):
         5. 建议具体行动
         """
         await self.run_test(
-            test_id="TC077",
+            test_id="TC304",
             test_name="推理性查询",
             message="儿子最近身高增长加速，可能是什么原因？",
             expected_keywords=["身高", "儿子", "原因"]
@@ -138,16 +138,16 @@ async def main():
         return 1
     
     try:
-        await tester.test_tc074_multi_dimension_query()
+        await tester.test_tc301_multi_dimension_query()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc075_trend_comparison_analysis()
+        await tester.test_tc302_trend_comparison_analysis()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc076_hypothetical_query()
+        await tester.test_tc303_hypothetical_query()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc077_inference_query()
+        await tester.test_tc304_inference_query()
         
         tester.print_summary()
         return 0

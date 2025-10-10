@@ -2,7 +2,7 @@
 """
 P0 集成测试 - 数据准确性
 
-测试用例：TC090 - TC096
+测试用例：TC141 - TC147
 优先级：P0（核心必测）
 
 功能覆盖：
@@ -25,9 +25,9 @@ class TestP0DataAccuracy(IntegrationTestBase):
     def __init__(self):
         super().__init__(test_suite_name="p0_data_accuracy")
     
-    async def test_tc090_storage_accuracy(self):
+    async def test_tc141_storage_accuracy(self):
         """
-        TC090: 信息存储准确性
+        TC141: 信息存储准确性
         
         验证点：
         1. 记录一条支出
@@ -36,7 +36,7 @@ class TestP0DataAccuracy(IntegrationTestBase):
         4. 数值准确：金额150元
         """
         await self.run_test(
-            test_id="TC090",
+            test_id="TC141",
             test_name="信息存储准确性",
             message="买菜花了150元",
             expected_keywords=["记录", "150"]
@@ -67,9 +67,9 @@ class TestP0DataAccuracy(IntegrationTestBase):
         success, msg = await verify()
         print(f"验证结果: {'✅' if success else '❌'} {msg}")
     
-    async def test_tc091_retrieval_accuracy(self):
+    async def test_tc142_retrieval_accuracy(self):
         """
-        TC091: 信息检索准确性
+        TC142: 信息检索准确性
         
         验证点：
         1. 先存储一条特定信息
@@ -79,7 +79,7 @@ class TestP0DataAccuracy(IntegrationTestBase):
         """
         print("\n--- 步骤1：存储数据 ---")
         await self.run_test(
-            test_id="TC091-setup",
+            test_id="TC142-setup",
             test_name="存储测试数据",
             message="打车到机场花了180元",
             expected_keywords=["记录", "180"]
@@ -89,15 +89,15 @@ class TestP0DataAccuracy(IntegrationTestBase):
         
         print("\n--- 步骤2：查询数据 ---")
         await self.run_test(
-            test_id="TC091",
+            test_id="TC142",
             test_name="检索数据验证",
             message="刚才打车花了多少钱？",
             expected_keywords=["180", "打车"]
         )
     
-    async def test_tc092_update_correctness(self):
+    async def test_tc143_update_correctness(self):
         """
-        TC092: 信息更新正确性
+        TC143: 信息更新正确性
         
         验证点：
         1. 先存储一条信息
@@ -107,7 +107,7 @@ class TestP0DataAccuracy(IntegrationTestBase):
         """
         print("\n--- 步骤1：首次存储 ---")
         await self.run_test(
-            test_id="TC092-1",
+            test_id="TC143-1",
             test_name="首次存储WiFi密码",
             message="家里WiFi密码是password123",
             expected_keywords=["记录", "密码"]
@@ -117,7 +117,7 @@ class TestP0DataAccuracy(IntegrationTestBase):
         
         print("\n--- 步骤2：更新信息 ---")
         await self.run_test(
-            test_id="TC092",
+            test_id="TC143",
             test_name="更新WiFi密码",
             message="WiFi密码改成newpass456了",
             expected_keywords=["密码"]
@@ -125,9 +125,9 @@ class TestP0DataAccuracy(IntegrationTestBase):
         
         print("\n提示：应该更新记录而非新增，验证数据库中只有一条有效的WiFi密码")
     
-    async def test_tc094_timezone_handling(self):
+    async def test_tc144_timezone_handling(self):
         """
-        TC094: 时区处理
+        TC144: 时区处理
         
         验证点：
         1. 记录"今天早上8点"的事
@@ -136,7 +136,7 @@ class TestP0DataAccuracy(IntegrationTestBase):
         4. 不是UTC或其他时区
         """
         await self.run_test(
-            test_id="TC094",
+            test_id="TC144",
             test_name="时区处理验证",
             message="记一下今天早上8点去了医院",
             expected_keywords=["记录", "8点", "医院"]
@@ -145,9 +145,9 @@ class TestP0DataAccuracy(IntegrationTestBase):
         # 验证occurred_at时区
         print("\n提示：occurred_at应使用Asia/Shanghai时区，早上8点")
     
-    async def test_tc095_natural_date_parsing(self):
+    async def test_tc145_natural_date_parsing(self):
         """
-        TC095: 自然语言日期解析
+        TC145: 自然语言日期解析
         
         验证点：
         1. "上周三" → 具体日期
@@ -162,16 +162,16 @@ class TestP0DataAccuracy(IntegrationTestBase):
         
         for i, (message, date_desc) in enumerate(test_cases, 1):
             await self.run_test(
-                test_id=f"TC095-{i}",
+                test_id=f"TC145-{i}",
                 test_name=f"日期解析 - {date_desc}",
                 message=message,
                 expected_keywords=["记录"]
             )
             await asyncio.sleep(0.3)
     
-    async def test_tc096_time_range_query(self):
+    async def test_tc146_time_range_query(self):
         """
-        TC096: 时间范围查询
+        TC146: 时间范围查询
         
         验证点：
         1. 先记录几笔支出（不同日期）
@@ -189,7 +189,7 @@ class TestP0DataAccuracy(IntegrationTestBase):
         
         for i, expense in enumerate(expenses, 1):
             await self.run_test(
-                test_id=f"TC096-setup-{i}",
+                test_id=f"TC146-setup-{i}",
                 test_name=f"准备数据 {i}",
                 message=expense,
                 expected_keywords=["记录"]
@@ -204,7 +204,7 @@ class TestP0DataAccuracy(IntegrationTestBase):
         month_start = today.replace(day=1).strftime("%m月1日")
         
         await self.run_test(
-            test_id="TC096",
+            test_id="TC146",
             test_name="时间范围查询",
             message=f"查询{month_start}到今天的支出",
             expected_keywords=["支出"]
@@ -227,22 +227,22 @@ async def main():
     
     try:
         # 运行所有测试
-        await tester.test_tc090_storage_accuracy()
+        await tester.test_tc141_storage_accuracy()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc091_retrieval_accuracy()
+        await tester.test_tc142_retrieval_accuracy()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc092_update_correctness()
+        await tester.test_tc143_update_correctness()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc094_timezone_handling()
+        await tester.test_tc144_timezone_handling()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc095_natural_date_parsing()
+        await tester.test_tc145_natural_date_parsing()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc096_time_range_query()
+        await tester.test_tc146_time_range_query()
         
         # 打印总结
         tester.print_summary()

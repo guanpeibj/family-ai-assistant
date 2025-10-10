@@ -2,7 +2,7 @@
 """
 P2 集成测试 - 数据关联性
 
-测试用例：TC097 - TC099
+测试用例：TC421 - TC423
 优先级：P2（增强功能）
 
 功能覆盖：
@@ -21,9 +21,9 @@ class TestP2DataCorrelation(IntegrationTestBase):
     def __init__(self):
         super().__init__(test_suite_name="p2_correlation")
     
-    async def test_tc097_member_correlation(self):
+    async def test_tc421_member_correlation(self):
         """
-        TC097: 家庭成员关联正确性
+        TC421: 家庭成员关联正确性
         
         验证点：
         1. 给三个孩子分别记录信息
@@ -41,7 +41,7 @@ class TestP2DataCorrelation(IntegrationTestBase):
         
         for message, person in records:
             await self.run_test(
-                test_id="TC097-setup",
+                test_id="TC421-setup",
                 test_name=f"记录{person}数据",
                 message=message,
                 expected_keywords=["记录", person]
@@ -52,15 +52,15 @@ class TestP2DataCorrelation(IntegrationTestBase):
         
         print("\n--- 验证：查询特定人员数据 ---")
         await self.run_test(
-            test_id="TC097",
+            test_id="TC421",
             test_name="查询大女儿的支出",
             message="这个月给大女儿花了多少钱？",
             expected_keywords=["大女儿", "120"]
         )
     
-    async def test_tc098_thread_isolation(self):
+    async def test_tc422_thread_isolation(self):
         """
-        TC098: 线程隔离正确性
+        TC422: 线程隔离正确性
         
         验证点：
         1. 在不同thread_id中记录信息
@@ -70,7 +70,7 @@ class TestP2DataCorrelation(IntegrationTestBase):
         """
         print("\n--- 在线程A中记录 ---")
         await self.run_test(
-            test_id="TC098-1",
+            test_id="TC422-1",
             test_name="线程A记录",
             message="买菜80元",
             expected_keywords=["记录"],
@@ -81,7 +81,7 @@ class TestP2DataCorrelation(IntegrationTestBase):
         
         print("\n--- 在线程B中记录 ---")
         await self.run_test(
-            test_id="TC098-2",
+            test_id="TC422-2",
             test_name="线程B记录",
             message="打车50元",
             expected_keywords=["记录"],
@@ -92,7 +92,7 @@ class TestP2DataCorrelation(IntegrationTestBase):
         
         print("\n--- 验证：在线程A中查询 ---")
         await self.run_test(
-            test_id="TC098",
+            test_id="TC422",
             test_name="线程A查询",
             message="今天花了多少钱？",
             expected_keywords=["80"],  # 应只返回线程A的80元
@@ -100,9 +100,9 @@ class TestP2DataCorrelation(IntegrationTestBase):
             context={"thread_id": "thread_A"}
         )
     
-    async def test_tc099_shared_thread_access(self):
+    async def test_tc423_shared_thread_access(self):
         """
-        TC099: 共享线程数据访问
+        TC423: 共享线程数据访问
         
         验证点：
         1. 在家庭群（shared_thread=true）中记录
@@ -112,7 +112,7 @@ class TestP2DataCorrelation(IntegrationTestBase):
         """
         print("\n--- 在家庭群中记录 ---")
         await self.run_test(
-            test_id="TC099-1",
+            test_id="TC423-1",
             test_name="家庭群记录",
             message="买菜花了150元",
             expected_keywords=["记录"],
@@ -123,7 +123,7 @@ class TestP2DataCorrelation(IntegrationTestBase):
         
         print("\n--- 验证：家庭范围查询 ---")
         await self.run_test(
-            test_id="TC099",
+            test_id="TC423",
             test_name="家庭群查询",
             message="家里今天花了多少钱？",
             expected_keywords=["150", "支出"],
@@ -145,13 +145,13 @@ async def main():
         return 1
     
     try:
-        await tester.test_tc097_member_correlation()
+        await tester.test_tc421_member_correlation()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc098_thread_isolation()
+        await tester.test_tc422_thread_isolation()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc099_shared_thread_access()
+        await tester.test_tc423_shared_thread_access()
         
         tester.print_summary()
         return 0

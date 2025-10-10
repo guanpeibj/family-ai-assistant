@@ -2,7 +2,7 @@
 """
 P0 集成测试 - 基础健康记录功能
 
-测试用例：TC026 - TC028
+测试用例：TC061 - TC063
 优先级：P0（核心必测）
 
 功能覆盖：
@@ -21,9 +21,9 @@ class TestP0Health(IntegrationTestBase):
     def __init__(self):
         super().__init__(test_suite_name="p0_health")
     
-    async def test_tc026_record_height(self):
+    async def test_tc061_record_height(self):
         """
-        TC026: 记录身高
+        TC061: 记录身高
         
         验证点：
         1. AI理解健康记录意图
@@ -39,16 +39,16 @@ class TestP0Health(IntegrationTestBase):
             )
         
         await self.run_test(
-            test_id="TC026",
+            test_id="TC061",
             test_name="记录身高",
             message="儿子今天身高92cm",
             expected_keywords=["记录", "92"],
             verify_db=verify
         )
     
-    async def test_tc027_record_weight(self):
+    async def test_tc062_record_weight(self):
         """
-        TC027: 记录体重
+        TC062: 记录体重
         
         验证点：
         1. AI理解体重记录意图
@@ -63,16 +63,16 @@ class TestP0Health(IntegrationTestBase):
             )
         
         await self.run_test(
-            test_id="TC027",
+            test_id="TC062",
             test_name="记录体重",
             message="大女儿体重25kg",
             expected_keywords=["记录", "25"],
             verify_db=verify
         )
     
-    async def test_tc028_record_checkup_multiple_metrics(self):
+    async def test_tc063_record_checkup_multiple_metrics(self):
         """
-        TC028: 记录体检结果（多指标）
+        TC063: 记录体检结果（多指标）
         
         验证点：
         1. AI理解体检记录意图
@@ -82,7 +82,7 @@ class TestP0Health(IntegrationTestBase):
         5. 可能创建多条记录或一条综合记录
         """
         await self.run_test(
-            test_id="TC028",
+            test_id="TC063",
             test_name="记录体检结果 - 多指标",
             message="今天带二女儿体检，身高85cm，体重16kg，视力正常",
             expected_keywords=["记录", "85", "16"]
@@ -125,13 +125,13 @@ async def main():
     
     try:
         # 运行所有测试
-        await tester.test_tc026_record_height()
+        await tester.test_tc061_record_height()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc027_record_weight()
+        await tester.test_tc062_record_weight()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc028_record_checkup_multiple_metrics()
+        await tester.test_tc063_record_checkup_multiple_metrics()
         
         # 打印总结
         tester.print_summary()

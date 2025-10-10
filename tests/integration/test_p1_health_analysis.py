@@ -2,7 +2,7 @@
 """
 P1 集成测试 - 健康分析功能
 
-测试用例：TC032 - TC037
+测试用例：TC221 - TC226
 优先级：P1（重要功能）
 
 功能覆盖：
@@ -49,9 +49,9 @@ class TestP1HealthAnalysis(IntegrationTestBase):
         print("--- 健康数据准备完成 ---\n")
         await asyncio.sleep(0.5)
     
-    async def test_tc032_query_height_history(self):
+    async def test_tc221_query_height_history(self):
         """
-        TC032: 查询身高历史
+        TC221: 查询身高历史
         
         验证点：
         1. AI理解查询身高记录的意图
@@ -63,15 +63,15 @@ class TestP1HealthAnalysis(IntegrationTestBase):
         await self._prepare_health_data()
         
         await self.run_test(
-            test_id="TC032",
+            test_id="TC221",
             test_name="查询身高历史",
             message="儿子的身高记录",
             expected_keywords=["身高", "儿子"]
         )
     
-    async def test_tc033_growth_curve_analysis(self):
+    async def test_tc222_growth_curve_analysis(self):
         """
-        TC033: 成长曲线分析
+        TC222: 成长曲线分析
         
         验证点：
         1. AI理解成长分析的复杂意图
@@ -81,15 +81,15 @@ class TestP1HealthAnalysis(IntegrationTestBase):
         5. 可能生成图表
         """
         await self.run_test(
-            test_id="TC033",
+            test_id="TC222",
             test_name="成长曲线分析",
             message="分析儿子最近半年的成长情况",
             expected_keywords=["成长", "儿子"]
         )
     
-    async def test_tc034_health_indicators_comparison(self):
+    async def test_tc223_health_indicators_comparison(self):
         """
-        TC034: 健康指标对比
+        TC223: 健康指标对比
         
         验证点：
         1. AI理解对比多个孩子指标的意图
@@ -98,15 +98,15 @@ class TestP1HealthAnalysis(IntegrationTestBase):
         4. 可能用表格或列表格式
         """
         await self.run_test(
-            test_id="TC034",
+            test_id="TC223",
             test_name="健康指标对比",
             message="三个孩子现在的身高体重分别是多少？",
             expected_keywords=["身高", "体重", "孩子"]
         )
     
-    async def test_tc035_vaccine_records_query(self):
+    async def test_tc224_vaccine_records_query(self):
         """
-        TC035: 疫苗记录查询
+        TC224: 疫苗记录查询
         
         验证点：
         1. AI理解查询疫苗的意图
@@ -115,15 +115,15 @@ class TestP1HealthAnalysis(IntegrationTestBase):
         4. 按时间排列
         """
         await self.run_test(
-            test_id="TC035",
+            test_id="TC224",
             test_name="疫苗记录查询",
             message="大女儿打过哪些疫苗？",
             expected_keywords=["疫苗", "大女儿"]
         )
     
-    async def test_tc036_medication_history_query(self):
+    async def test_tc225_medication_history_query(self):
         """
-        TC036: 用药历史查询
+        TC225: 用药历史查询
         
         验证点：
         1. AI理解查询生病和用药的意图
@@ -132,15 +132,15 @@ class TestP1HealthAnalysis(IntegrationTestBase):
         4. 显示病情描述
         """
         await self.run_test(
-            test_id="TC036",
+            test_id="TC225",
             test_name="用药历史查询",
             message="儿子上次生病是什么时候？吃的什么药？",
             expected_keywords=["儿子"]
         )
     
-    async def test_tc037_health_advice_generation(self):
+    async def test_tc226_health_advice_generation(self):
         """
-        TC037: 健康建议生成
+        TC226: 健康建议生成
         
         验证点：
         1. AI理解健康咨询的意图
@@ -150,7 +150,7 @@ class TestP1HealthAnalysis(IntegrationTestBase):
         5. 建议合理且有依据
         """
         await self.run_test(
-            test_id="TC037",
+            test_id="TC226",
             test_name="健康建议生成",
             message="儿子最近身高增长慢，有什么建议吗？",
             expected_keywords=["建议", "儿子"]
@@ -171,22 +171,22 @@ async def main():
         return 1
     
     try:
-        await tester.test_tc032_query_height_history()
+        await tester.test_tc221_query_height_history()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc033_growth_curve_analysis()
+        await tester.test_tc222_growth_curve_analysis()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc034_health_indicators_comparison()
+        await tester.test_tc223_health_indicators_comparison()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc035_vaccine_records_query()
+        await tester.test_tc224_vaccine_records_query()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc036_medication_history_query()
+        await tester.test_tc225_medication_history_query()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc037_health_advice_generation()
+        await tester.test_tc226_health_advice_generation()
         
         tester.print_summary()
         return 0

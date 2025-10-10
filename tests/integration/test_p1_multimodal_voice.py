@@ -2,7 +2,7 @@
 """
 P1 集成测试 - 语音输入处理
 
-测试用例：TC059 - TC062
+测试用例：TC261 - TC264
 优先级：P1（重要功能）
 
 功能覆盖：
@@ -24,9 +24,9 @@ class TestP1MultimodalVoice(IntegrationTestBase):
     def __init__(self):
         super().__init__(test_suite_name="p1_voice")
     
-    async def test_tc059_voice_accounting_complete(self):
+    async def test_tc261_voice_accounting_complete(self):
         """
-        TC059: 语音记账 - 完整信息
+        TC261: 语音记账 - 完整信息
         
         验证点：
         1. 系统接收语音并转写为文字
@@ -43,16 +43,16 @@ class TestP1MultimodalVoice(IntegrationTestBase):
         transcribed_text = "今天中午点外卖花了四十五块钱"
         
         await self.run_test(
-            test_id="TC059",
+            test_id="TC261",
             test_name="语音记账 - 完整信息",
             message=transcribed_text,
             expected_keywords=["记录", "45", "外卖"],
             context={"source": "voice", "transcription": transcribed_text}
         )
     
-    async def test_tc060_voice_accounting_colloquial_numbers(self):
+    async def test_tc262_voice_accounting_colloquial_numbers(self):
         """
-        TC060: 语音记账 - 口语化数字
+        TC262: 语音记账 - 口语化数字
         
         验证点：
         1. 识别口语化数字表达
@@ -61,7 +61,7 @@ class TestP1MultimodalVoice(IntegrationTestBase):
         4. 准确记账
         """
         await self.run_test(
-            test_id="TC060",
+            test_id="TC262",
             test_name="语音记账 - 口语化数字",
             message="买菜三块五",
             expected_keywords=["记录"],
@@ -79,9 +79,9 @@ class TestP1MultimodalVoice(IntegrationTestBase):
         success, msg = await verify()
         print(f"验证结果: {'✅' if success else '❌'} {msg}")
     
-    async def test_tc061_voice_accounting_need_supplement(self):
+    async def test_tc263_voice_accounting_need_supplement(self):
         """
-        TC061: 语音记账 - 需补充
+        TC263: 语音记账 - 需补充
         
         验证点：
         1. 识别缺少金额信息
@@ -91,7 +91,7 @@ class TestP1MultimodalVoice(IntegrationTestBase):
         """
         print("\n--- 步骤1：发起记账，缺少金额 ---")
         await self.run_test(
-            test_id="TC061-1",
+            test_id="TC263-1",
             test_name="语音记账 - 缺少金额",
             message="给孩子买了本书",
             expected_keywords=["多少", "金额"],
@@ -102,16 +102,16 @@ class TestP1MultimodalVoice(IntegrationTestBase):
         
         print("\n--- 步骤2：补充金额和人员 ---")
         await self.run_test(
-            test_id="TC061",
+            test_id="TC263",
             test_name="补充信息 - 完成记账",
             message="五十块钱，给大女儿买的",
             expected_keywords=["记录", "50"],
             context={"source": "voice"}
         )
     
-    async def test_tc062_voice_query(self):
+    async def test_tc264_voice_query(self):
         """
-        TC062: 语音查询
+        TC264: 语音查询
         
         验证点：
         1. 理解语音查询意图
@@ -122,7 +122,7 @@ class TestP1MultimodalVoice(IntegrationTestBase):
         # 先记录一些数据
         print("\n--- 准备测试数据 ---")
         await self.run_test(
-            test_id="TC062-setup",
+            test_id="TC264-setup",
             test_name="准备数据",
             message="买菜花了八十元",
             expected_keywords=["记录"],
@@ -133,7 +133,7 @@ class TestP1MultimodalVoice(IntegrationTestBase):
         
         print("\n--- 主测试：语音查询 ---")
         await self.run_test(
-            test_id="TC062",
+            test_id="TC264",
             test_name="语音查询预算",
             message="这个月预算还剩多少",
             expected_keywords=["预算"],
@@ -155,16 +155,16 @@ async def main():
         return 1
     
     try:
-        await tester.test_tc059_voice_accounting_complete()
+        await tester.test_tc261_voice_accounting_complete()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc060_voice_accounting_colloquial_numbers()
+        await tester.test_tc262_voice_accounting_colloquial_numbers()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc061_voice_accounting_need_supplement()
+        await tester.test_tc263_voice_accounting_need_supplement()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc062_voice_query()
+        await tester.test_tc264_voice_query()
         
         tester.print_summary()
         return 0

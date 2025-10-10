@@ -2,7 +2,7 @@
 """
 P1 集成测试 - 图片识别处理
 
-测试用例：TC063 - TC067
+测试用例：TC281 - TC285
 优先级：P1（重要功能）
 
 功能覆盖：
@@ -25,9 +25,9 @@ class TestP1MultimodalImage(IntegrationTestBase):
     def __init__(self):
         super().__init__(test_suite_name="p1_image")
     
-    async def test_tc063_alipay_screenshot(self):
+    async def test_tc281_alipay_screenshot(self):
         """
-        TC063: 支付宝截图识别
+        TC281: 支付宝截图识别
         
         验证点：
         1. 识别支付宝支付截图
@@ -44,7 +44,7 @@ class TestP1MultimodalImage(IntegrationTestBase):
         
         print("\n--- 步骤1：AI识别截图内容 ---")
         await self.run_test(
-            test_id="TC063-1",
+            test_id="TC281-1",
             test_name="识别支付截图",
             message="[发送支付宝截图]",
             expected_keywords=["星巴克", "78", "是否记录", "确认"],
@@ -61,15 +61,15 @@ class TestP1MultimodalImage(IntegrationTestBase):
         
         print("\n--- 步骤2：用户确认记账 ---")
         await self.run_test(
-            test_id="TC063",
+            test_id="TC281",
             test_name="确认记账",
             message="对，记录一下",
             expected_keywords=["记录", "78"]
         )
     
-    async def test_tc064_wechat_payment_screenshot(self):
+    async def test_tc282_wechat_payment_screenshot(self):
         """
-        TC064: 微信支付截图识别
+        TC282: 微信支付截图识别
         
         验证点：
         1. 识别微信支付截图
@@ -79,7 +79,7 @@ class TestP1MultimodalImage(IntegrationTestBase):
         vision_summary = "微信支付记录，支付给美团外卖45元"
         
         await self.run_test(
-            test_id="TC064",
+            test_id="TC282",
             test_name="微信支付截图识别",
             message="[发送微信支付截图]",
             expected_keywords=["45", "外卖"],
@@ -91,9 +91,9 @@ class TestP1MultimodalImage(IntegrationTestBase):
             }
         )
     
-    async def test_tc065_receipt_recognition(self):
+    async def test_tc283_receipt_recognition(self):
         """
-        TC065: 小票识别
+        TC283: 小票识别
         
         验证点：
         1. 识别超市小票
@@ -114,7 +114,7 @@ class TestP1MultimodalImage(IntegrationTestBase):
         """
         
         await self.run_test(
-            test_id="TC065",
+            test_id="TC283",
             test_name="超市小票识别",
             message="[发送超市小票照片]",
             expected_keywords=["75", "超市"],
@@ -126,9 +126,9 @@ class TestP1MultimodalImage(IntegrationTestBase):
             }
         )
     
-    async def test_tc066_health_report_recognition(self):
+    async def test_tc284_health_report_recognition(self):
         """
-        TC066: 体检报告识别
+        TC284: 体检报告识别
         
         验证点：
         1. 识别体检报告图片
@@ -140,7 +140,7 @@ class TestP1MultimodalImage(IntegrationTestBase):
         
         print("\n--- 识别体检报告 ---")
         await self.run_test(
-            test_id="TC066-1",
+            test_id="TC284-1",
             test_name="识别体检报告",
             message="[发送孩子体检报告]",
             expected_keywords=["85", "16", "体检"],
@@ -157,15 +157,15 @@ class TestP1MultimodalImage(IntegrationTestBase):
         # 如果AI需要确认人员
         print("\n--- 确认是哪个孩子 ---")
         await self.run_test(
-            test_id="TC066",
+            test_id="TC284",
             test_name="确认人员",
             message="是二女儿的",
             expected_keywords=["记录", "二女儿"]
         )
     
-    async def test_tc067_recognition_failure_fallback(self):
+    async def test_tc285_recognition_failure_fallback(self):
         """
-        TC067: 识别失败降级
+        TC285: 识别失败降级
         
         验证点：
         1. 图片模糊或无法识别
@@ -174,7 +174,7 @@ class TestP1MultimodalImage(IntegrationTestBase):
         4. 不强制要求图片内容
         """
         await self.run_test(
-            test_id="TC067",
+            test_id="TC285",
             test_name="识别失败降级",
             message="[发送模糊图片]",
             expected_keywords=["无法", "不清楚", "手动", "输入"],
@@ -201,19 +201,19 @@ async def main():
         return 1
     
     try:
-        await tester.test_tc063_alipay_screenshot()
+        await tester.test_tc281_alipay_screenshot()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc064_wechat_payment_screenshot()
+        await tester.test_tc282_wechat_payment_screenshot()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc065_receipt_recognition()
+        await tester.test_tc283_receipt_recognition()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc066_health_report_recognition()
+        await tester.test_tc284_health_report_recognition()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc067_recognition_failure_fallback()
+        await tester.test_tc285_recognition_failure_fallback()
         
         tester.print_summary()
         return 0

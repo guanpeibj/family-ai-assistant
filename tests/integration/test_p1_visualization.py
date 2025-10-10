@@ -2,7 +2,7 @@
 """
 P1 集成测试 - 可视化功能
 
-测试用例：TC023 - TC025
+测试用例：TC201 - TC203
 优先级：P1（重要功能）
 
 功能覆盖：
@@ -47,9 +47,9 @@ class TestP1Visualization(IntegrationTestBase):
         print("--- 数据准备完成 ---\n")
         await asyncio.sleep(0.5)
     
-    async def test_tc023_category_pie_chart(self):
+    async def test_tc201_category_pie_chart(self):
         """
-        TC023: 支出类目饼图
+        TC201: 支出类目饼图
         
         验证点：
         1. AI理解生成饼图的意图
@@ -61,15 +61,15 @@ class TestP1Visualization(IntegrationTestBase):
         await self._prepare_visualization_data()
         
         await self.run_test(
-            test_id="TC023",
+            test_id="TC201",
             test_name="生成支出类目饼图",
             message="生成本月支出类目占比图",
             expected_keywords=["图"]  # 可能包含"图表"、"已生成"等
         )
     
-    async def test_tc024_trend_line_chart(self):
+    async def test_tc202_trend_line_chart(self):
         """
-        TC024: 月度趋势折线图
+        TC202: 月度趋势折线图
         
         验证点：
         1. AI理解生成趋势图的意图
@@ -79,15 +79,15 @@ class TestP1Visualization(IntegrationTestBase):
         5. 返回图表访问方式
         """
         await self.run_test(
-            test_id="TC024",
+            test_id="TC202",
             test_name="生成月度趋势折线图",
             message="画一个近3个月支出趋势图",
             expected_keywords=["图", "趋势"]
         )
     
-    async def test_tc025_comparison_bar_chart(self):
+    async def test_tc203_comparison_bar_chart(self):
         """
-        TC025: 类目对比柱状图
+        TC203: 类目对比柱状图
         
         验证点：
         1. AI理解生成对比图的意图
@@ -97,7 +97,7 @@ class TestP1Visualization(IntegrationTestBase):
         5. 返回图表信息
         """
         await self.run_test(
-            test_id="TC025",
+            test_id="TC203",
             test_name="生成类目对比柱状图",
             message="对比本月和上月各类支出",
             expected_keywords=["支出"]  # 可能包含图表信息
@@ -118,13 +118,13 @@ async def main():
         return 1
     
     try:
-        await tester.test_tc023_category_pie_chart()
+        await tester.test_tc201_category_pie_chart()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc024_trend_line_chart()
+        await tester.test_tc202_trend_line_chart()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc025_comparison_bar_chart()
+        await tester.test_tc203_comparison_bar_chart()
         
         tester.print_summary()
         return 0

@@ -2,7 +2,7 @@
 """
 P0 集成测试 - 日常场景与性能
 
-测试用例：TC104, TC106 - TC109
+测试用例：TC161, TC163 - TC166
 优先级：P0（核心必测）
 
 功能覆盖：
@@ -24,9 +24,9 @@ class TestP0Scenarios(IntegrationTestBase):
     def __init__(self):
         super().__init__(test_suite_name="p0_scenarios")
     
-    async def test_tc104_simple_query_performance(self):
+    async def test_tc161_simple_query_performance(self):
         """
-        TC104: 简单查询响应时间
+        TC161: 简单查询响应时间
         
         验证点：
         1. 查询"这个月花了多少钱"
@@ -40,7 +40,7 @@ class TestP0Scenarios(IntegrationTestBase):
         expenses = ["买菜80元", "打车25元", "午餐45元"]
         for expense in expenses:
             await self.run_test(
-                test_id="TC104-setup",
+                test_id="TC161-setup",
                 test_name="准备数据",
                 message=expense,
                 expected_keywords=["记录"]
@@ -52,7 +52,7 @@ class TestP0Scenarios(IntegrationTestBase):
         # 主测试：性能验证
         print("\n--- 主测试：性能验证 ---")
         result = await self.run_test(
-            test_id="TC104",
+            test_id="TC161",
             test_name="简单查询响应时间",
             message="这个月花了多少钱？",
             expected_keywords=["支出"]
@@ -66,9 +66,9 @@ class TestP0Scenarios(IntegrationTestBase):
             else:
                 print(f"⚠️ 性能未达标：{duration:.2f}秒 >= 5秒")
     
-    async def test_tc106_morning_wake_scenario(self):
+    async def test_tc163_morning_wake_scenario(self):
         """
-        TC106: 早晨唤醒场景
+        TC163: 早晨唤醒场景
         
         验证点：
         1. AI理解问候和查询意图
@@ -78,15 +78,15 @@ class TestP0Scenarios(IntegrationTestBase):
         5. 响应友好自然
         """
         await self.run_test(
-            test_id="TC106",
+            test_id="TC163",
             test_name="早晨唤醒场景",
             message="早上好，今天有什么安排？",
             expected_keywords=[]  # AI自由发挥，可能包含提醒、预算等
         )
     
-    async def test_tc107_daily_accounting_flow(self):
+    async def test_tc164_daily_accounting_flow(self):
         """
-        TC107: 一天记账流程
+        TC164: 一天记账流程
         
         验证点：
         1. 模拟一天的6笔支出
@@ -109,7 +109,7 @@ class TestP0Scenarios(IntegrationTestBase):
         for i, (expense, label) in enumerate(daily_expenses, 1):
             print(f"\n--- {label} ({i}/6) ---")
             await self.run_test(
-                test_id=f"TC107-{i}",
+                test_id=f"TC164-{i}",
                 test_name=f"一天记账 - {label}",
                 message=expense,
                 expected_keywords=["记录"]
@@ -119,9 +119,9 @@ class TestP0Scenarios(IntegrationTestBase):
         print("\n--- 验证：一天记账完成 ---")
         print("✅ 6笔支出都已记录")
     
-    async def test_tc108_check_budget_usage(self):
+    async def test_tc165_check_budget_usage(self):
         """
-        TC108: 查看预算使用情况
+        TC165: 查看预算使用情况
         
         验证点：
         1. AI理解查询剩余预算的意图
@@ -130,15 +130,15 @@ class TestP0Scenarios(IntegrationTestBase):
         4. 可能给出消费建议
         """
         await self.run_test(
-            test_id="TC108",
+            test_id="TC165",
             test_name="查看预算使用情况",
             message="今天还能花多少钱？",
             expected_keywords=["预算", "剩余", "还能"]
         )
     
-    async def test_tc109_set_tomorrow_reminder(self):
+    async def test_tc166_set_tomorrow_reminder(self):
         """
-        TC109: 设置明天提醒
+        TC166: 设置明天提醒
         
         验证点：
         1. AI理解明天的提醒设置
@@ -148,7 +148,7 @@ class TestP0Scenarios(IntegrationTestBase):
         5. 确认设置成功
         """
         await self.run_test(
-            test_id="TC109",
+            test_id="TC166",
             test_name="设置明天提醒",
             message="明天提醒我给大女儿带雨伞",
             expected_keywords=["提醒", "明天"]
@@ -171,19 +171,19 @@ async def main():
     
     try:
         # 运行所有测试
-        await tester.test_tc104_simple_query_performance()
+        await tester.test_tc161_simple_query_performance()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc106_morning_wake_scenario()
+        await tester.test_tc163_morning_wake_scenario()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc107_daily_accounting_flow()
+        await tester.test_tc164_daily_accounting_flow()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc108_check_budget_usage()
+        await tester.test_tc165_check_budget_usage()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc109_set_tomorrow_reminder()
+        await tester.test_tc166_set_tomorrow_reminder()
         
         # 打印总结
         tester.print_summary()

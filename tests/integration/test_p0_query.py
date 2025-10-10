@@ -2,7 +2,7 @@
 """
 P0 集成测试 - 基础查询功能
 
-测试用例：TC015 - TC018
+测试用例：TC041 - TC044
 优先级：P0（核心必测）
 
 功能覆盖：
@@ -39,7 +39,7 @@ class TestP0Query(IntegrationTestBase):
         
         for i, expense in enumerate(expenses, 1):
             await self.run_test(
-                test_id=f"TC015-setup-{i}",
+                test_id=f"TC041-setup-{i}",
                 test_name=f"准备数据 {i}/{len(expenses)}",
                 message=expense,
                 expected_keywords=["记录"]
@@ -49,9 +49,9 @@ class TestP0Query(IntegrationTestBase):
         print("--- 测试数据准备完成 ---\n")
         await asyncio.sleep(0.5)
     
-    async def test_tc015_query_monthly_expense(self):
+    async def test_tc041_query_monthly_expense(self):
         """
-        TC015: 查询月度支出
+        TC041: 查询月度支出
         
         验证点：
         1. AI理解查询本月支出的意图
@@ -62,15 +62,15 @@ class TestP0Query(IntegrationTestBase):
         await self._prepare_test_data()
         
         await self.run_test(
-            test_id="TC015",
+            test_id="TC041",
             test_name="查询月度支出",
             message="这个月花了多少钱？",
             expected_keywords=["支出", "元"]
         )
     
-    async def test_tc016_query_by_category(self):
+    async def test_tc042_query_by_category(self):
         """
-        TC016: 按类目查询
+        TC042: 按类目查询
         
         验证点：
         1. AI理解按类目筛选的意图
@@ -79,15 +79,15 @@ class TestP0Query(IntegrationTestBase):
         4. 可能包含明细列表
         """
         await self.run_test(
-            test_id="TC016",
+            test_id="TC042",
             test_name="按类目查询",
             message="本月餐饮支出是多少？",
             expected_keywords=["餐饮", "支出"]
         )
     
-    async def test_tc017_query_by_time_range(self):
+    async def test_tc043_query_by_time_range(self):
         """
-        TC017: 按时间范围查询
+        TC043: 按时间范围查询
         
         验证点：
         1. AI理解"最近一周"的时间范围
@@ -96,15 +96,15 @@ class TestP0Query(IntegrationTestBase):
         4. 可能包含日期和明细
         """
         await self.run_test(
-            test_id="TC017",
+            test_id="TC043",
             test_name="按时间范围查询",
             message="最近一周的支出",
             expected_keywords=["支出", "一周"]
         )
     
-    async def test_tc018_query_by_family_member(self):
+    async def test_tc044_query_by_family_member(self):
         """
-        TC018: 按家庭成员查询
+        TC044: 按家庭成员查询
         
         验证点：
         1. AI理解按成员筛选的意图
@@ -115,7 +115,7 @@ class TestP0Query(IntegrationTestBase):
         前提：测试数据中有"给大女儿买书120元"
         """
         await self.run_test(
-            test_id="TC018",
+            test_id="TC044",
             test_name="按家庭成员查询",
             message="这个月给大女儿花了多少钱？",
             expected_keywords=["大女儿", "支出"]
@@ -138,16 +138,16 @@ async def main():
     
     try:
         # 运行所有测试
-        await tester.test_tc015_query_monthly_expense()
+        await tester.test_tc041_query_monthly_expense()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc016_query_by_category()
+        await tester.test_tc042_query_by_category()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc017_query_by_time_range()
+        await tester.test_tc043_query_by_time_range()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc018_query_by_family_member()
+        await tester.test_tc044_query_by_family_member()
         
         # 打印总结
         tester.print_summary()

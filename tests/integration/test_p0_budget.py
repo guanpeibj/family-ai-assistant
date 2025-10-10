@@ -2,7 +2,7 @@
 """
 P0 集成测试 - 预算管理核心功能
 
-测试用例：TC009, TC010, TC011, TC013
+测试用例：TC021, TC022, TC023, TC024
 优先级：P0（核心必测）
 
 功能覆盖：
@@ -25,9 +25,9 @@ class TestP0Budget(IntegrationTestBase):
     def __init__(self):
         super().__init__(test_suite_name="p0_budget")
     
-    async def test_tc009_set_monthly_budget(self):
+    async def test_tc021_set_monthly_budget(self):
         """
-        TC009: 设置月度预算
+        TC021: 设置月度预算
         
         验证点：
         1. AI理解预算设置意图
@@ -39,7 +39,7 @@ class TestP0Budget(IntegrationTestBase):
         重要：这是家庭共享配置，不应存储在个人user_id下
         """
         await self.run_test(
-            test_id="TC009",
+            test_id="TC021",
             test_name="设置月度预算",
             message="设置本月预算10000元",
             expected_keywords=["设置", "预算", "10000"]
@@ -50,9 +50,9 @@ class TestP0Budget(IntegrationTestBase):
         # 实际应该查询user_id="family_default"的记录
         print("提示：预算应存储在family_default用户下")
     
-    async def test_tc010_set_category_budgets(self):
+    async def test_tc022_set_category_budgets(self):
         """
-        TC010: 设置分类预算
+        TC022: 设置分类预算
         
         验证点：
         1. AI理解分类预算设置
@@ -61,15 +61,15 @@ class TestP0Budget(IntegrationTestBase):
         4. 响应确认
         """
         await self.run_test(
-            test_id="TC010",
+            test_id="TC022",
             test_name="设置分类预算",
             message="设置本月预算：餐饮3000，教育2000，交通1000，其他4000",
             expected_keywords=["设置", "预算"]
         )
     
-    async def test_tc011_query_budget(self):
+    async def test_tc023_query_budget(self):
         """
-        TC011: 查询预算情况
+        TC023: 查询预算情况
         
         验证点：
         1. AI理解预算查询意图
@@ -85,7 +85,7 @@ class TestP0Budget(IntegrationTestBase):
         # 先记录几笔支出用于统计
         print("\n--- 准备测试数据：记录支出 ---")
         await self.run_test(
-            test_id="TC011-setup-1",
+            test_id="TC023-setup-1",
             test_name="准备数据 - 记录支出1",
             message="买菜花了150元",
             expected_keywords=["记录"]
@@ -94,7 +94,7 @@ class TestP0Budget(IntegrationTestBase):
         await asyncio.sleep(0.3)
         
         await self.run_test(
-            test_id="TC011-setup-2",
+            test_id="TC023-setup-2",
             test_name="准备数据 - 记录支出2",
             message="加油300元",
             expected_keywords=["记录"]
@@ -105,15 +105,15 @@ class TestP0Budget(IntegrationTestBase):
         # 查询预算
         print("\n--- 主测试：查询预算 ---")
         await self.run_test(
-            test_id="TC011",
+            test_id="TC023",
             test_name="查询预算情况",
             message="预算还剩多少？",
             expected_keywords=["预算", "支出"]
         )
     
-    async def test_tc013_budget_warning_80_percent(self):
+    async def test_tc024_budget_warning_80_percent(self):
         """
-        TC013: 预算警告 - 80%阈值
+        TC024: 预算警告 - 80%阈值
         
         验证点：
         1. 记录支出达到预算80%后
@@ -127,7 +127,7 @@ class TestP0Budget(IntegrationTestBase):
         """
         print("\n--- 准备测试：设置预算 ---")
         await self.run_test(
-            test_id="TC013-setup-1",
+            test_id="TC024-setup-1",
             test_name="设置测试预算",
             message="设置本月预算5000元",  # 使用较小金额便于触发
             expected_keywords=["设置", "预算"]
@@ -148,7 +148,7 @@ class TestP0Budget(IntegrationTestBase):
         
         for i, expense in enumerate(expenses, 1):
             await self.run_test(
-                test_id=f"TC013-setup-{i+1}",
+                test_id=f"TC024-setup-{i+1}",
                 test_name=f"记录支出 {i}/6",
                 message=expense,
                 expected_keywords=["记录"]
@@ -160,7 +160,7 @@ class TestP0Budget(IntegrationTestBase):
         print("\n--- 主测试：触发预算警告 ---")
         # 再记录一笔，应触发警告
         await self.run_test(
-            test_id="TC013",
+            test_id="TC024",
             test_name="预算警告 - 80%阈值",
             message="外卖100元",
             expected_keywords=["记录"]  # 可能包含"预算"、"80%"、"接近"等
@@ -183,16 +183,16 @@ async def main():
     
     try:
         # 运行所有测试
-        await tester.test_tc009_set_monthly_budget()
+        await tester.test_tc021_set_monthly_budget()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc010_set_category_budgets()
+        await tester.test_tc022_set_category_budgets()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc011_query_budget()
+        await tester.test_tc023_query_budget()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc013_budget_warning_80_percent()
+        await tester.test_tc024_budget_warning_80_percent()
         
         # 打印总结
         tester.print_summary()

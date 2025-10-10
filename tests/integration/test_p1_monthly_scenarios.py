@@ -2,7 +2,7 @@
 """
 P1 集成测试 - 月度场景
 
-测试用例：TC110 - TC112
+测试用例：TC361 - TC363
 优先级：P1（重要功能）
 
 功能覆盖：
@@ -48,9 +48,9 @@ class TestP1MonthlyScenarios(IntegrationTestBase):
         print("--- 数据准备完成 ---\n")
         await asyncio.sleep(0.5)
     
-    async def test_tc110_monthly_report_generation(self):
+    async def test_tc361_monthly_report_generation(self):
         """
-        TC110: 月初查看上月报告
+        TC361: 月初查看上月报告
         
         验证点：
         1. 查询上月数据
@@ -64,15 +64,15 @@ class TestP1MonthlyScenarios(IntegrationTestBase):
         await self._prepare_monthly_data()
         
         await self.run_test(
-            test_id="TC110",
+            test_id="TC361",
             test_name="月初查看上月报告",
             message="上个月财务报告",
             expected_keywords=["支出", "报告", "月"]
         )
     
-    async def test_tc111_set_new_month_budget(self):
+    async def test_tc362_set_new_month_budget(self):
         """
-        TC111: 月初设置新月预算
+        TC362: 月初设置新月预算
         
         验证点：
         1. 设置新月份预算
@@ -81,15 +81,15 @@ class TestP1MonthlyScenarios(IntegrationTestBase):
         4. 确认设置成功
         """
         await self.run_test(
-            test_id="TC111",
+            test_id="TC362",
             test_name="月初设置新月预算",
             message="设置11月预算12000元",
             expected_keywords=["设置", "预算", "12000"]
         )
     
-    async def test_tc112_month_end_budget_check(self):
+    async def test_tc363_month_end_budget_check(self):
         """
-        TC112: 月末预算检查
+        TC363: 月末预算检查
         
         验证点：
         1. 查询预算执行情况
@@ -103,7 +103,7 @@ class TestP1MonthlyScenarios(IntegrationTestBase):
         # 先设置预算
         print("\n--- 设置本月预算 ---")
         await self.run_test(
-            test_id="TC112-1",
+            test_id="TC363-1",
             test_name="设置预算",
             message="设置本月预算10000元",
             expected_keywords=["设置", "预算"]
@@ -114,7 +114,7 @@ class TestP1MonthlyScenarios(IntegrationTestBase):
         # 记录一些支出
         print("\n--- 记录支出 ---")
         await self.run_test(
-            test_id="TC112-2",
+            test_id="TC363-2",
             test_name="记录支出",
             message="餐饮支出2500元",
             expected_keywords=["记录"]
@@ -125,7 +125,7 @@ class TestP1MonthlyScenarios(IntegrationTestBase):
         # 月末检查
         print("\n--- 月末预算检查 ---")
         await self.run_test(
-            test_id="TC112",
+            test_id="TC363",
             test_name="月末预算检查",
             message="预算执行情况",
             expected_keywords=["预算", "支出"]
@@ -146,13 +146,13 @@ async def main():
         return 1
     
     try:
-        await tester.test_tc110_monthly_report_generation()
+        await tester.test_tc361_monthly_report_generation()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc111_set_new_month_budget()
+        await tester.test_tc362_set_new_month_budget()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc112_month_end_budget_check()
+        await tester.test_tc363_month_end_budget_check()
         
         tester.print_summary()
         return 0

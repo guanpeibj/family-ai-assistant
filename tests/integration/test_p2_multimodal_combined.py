@@ -2,7 +2,7 @@
 """
 P2 集成测试 - 组合输入处理
 
-测试用例：TC068 - TC069
+测试用例：TC381 - TC382
 优先级：P2（增强功能）
 
 功能覆盖：
@@ -20,9 +20,9 @@ class TestP2MultimodalCombined(IntegrationTestBase):
     def __init__(self):
         super().__init__(test_suite_name="p2_combined")
     
-    async def test_tc068_text_image_accounting(self):
+    async def test_tc381_text_image_accounting(self):
         """
-        TC068: 图文混合记账
+        TC381: 图文混合记账
         
         验证点：
         1. 结合文字描述和图片内容
@@ -34,7 +34,7 @@ class TestP2MultimodalCombined(IntegrationTestBase):
         vision_summary = "支付宝支付截图，金额160.00元"
         
         await self.run_test(
-            test_id="TC068",
+            test_id="TC381",
             test_name="图文混合记账",
             message="给大女儿买了校服",
             expected_keywords=["记录", "160", "大女儿"],
@@ -46,9 +46,9 @@ class TestP2MultimodalCombined(IntegrationTestBase):
             }
         )
     
-    async def test_tc069_voice_image_accounting(self):
+    async def test_tc382_voice_image_accounting(self):
         """
-        TC069: 语音+图片记账
+        TC382: 语音+图片记账
         
         验证点：
         1. 语音说明情况
@@ -63,7 +63,7 @@ class TestP2MultimodalCombined(IntegrationTestBase):
         ocr_text = "超市小票，合计85.00元"
         
         await self.run_test(
-            test_id="TC069",
+            test_id="TC382",
             test_name="语音+图片记账",
             message=transcription,
             expected_keywords=["记录", "85"],
@@ -91,10 +91,10 @@ async def main():
         return 1
     
     try:
-        await tester.test_tc068_text_image_accounting()
+        await tester.test_tc381_text_image_accounting()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc069_voice_image_accounting()
+        await tester.test_tc382_voice_image_accounting()
         
         tester.print_summary()
         return 0

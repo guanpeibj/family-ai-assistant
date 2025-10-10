@@ -2,7 +2,7 @@
 """
 P0 集成测试 - 澄清功能
 
-测试用例：TC070 - TC073
+测试用例：TC121 - TC124
 优先级：P0（核心必测）
 
 功能覆盖：
@@ -22,27 +22,27 @@ class TestP0Clarification(IntegrationTestBase):
     def __init__(self):
         super().__init__(test_suite_name="p0_clarification")
     
-    async def test_tc070_multi_field_clarification(self):
+    async def test_tc121_multi_field_clarification(self):
         """
-        TC070: 多字段缺失澄清
+        TC121: 多字段缺失澄清
         
         验证点：
         1. 识别缺少类别和金额
         2. 一次只问一个问题（不要一次问多个）
         3. 逐步引导用户补充信息
         
-        注：完整的多轮对话在TC073中测试
+注：完整的多轮对话在TC124中测试
         """
         await self.run_test(
-            test_id="TC070",
+            test_id="TC121",
             test_name="多字段缺失澄清",
             message="记账：买了东西",
             expected_keywords=["什么", "多少", "金额"]  # 应该询问具体内容或金额
         )
     
-    async def test_tc071_provide_options(self):
+    async def test_tc122_provide_options(self):
         """
-        TC071: 提供候选项引导
+        TC122: 提供候选项引导
         
         验证点：
         1. 识别"孩子"但未指定具体人员
@@ -51,15 +51,15 @@ class TestP0Clarification(IntegrationTestBase):
         4. 便于用户快速选择
         """
         await self.run_test(
-            test_id="TC071",
+            test_id="TC122",
             test_name="提供候选项引导",
             message="给孩子买了衣服100元",
             expected_keywords=["哪个", "孩子"]  # 可能列出：大女儿、二女儿、儿子
         )
     
-    async def test_tc072_multi_turn_context(self):
+    async def test_tc123_multi_turn_context(self):
         """
-        TC072: 多轮对话上下文理解
+        TC123: 多轮对话上下文理解
         
         验证点：
         1. AI记住前面对话的主题
@@ -69,7 +69,7 @@ class TestP0Clarification(IntegrationTestBase):
         """
         print("\n--- 轮1：查询总支出 ---")
         await self.run_test(
-            test_id="TC072-1",
+            test_id="TC123-1",
             test_name="多轮对话 - 第1轮",
             message="这个月花了多少钱？",
             expected_keywords=["支出"]
@@ -79,7 +79,7 @@ class TestP0Clarification(IntegrationTestBase):
         
         print("\n--- 轮2：继续问餐饮 ---")
         await self.run_test(
-            test_id="TC072-2",
+            test_id="TC123-2",
             test_name="多轮对话 - 第2轮",
             message="餐饮呢？",
             expected_keywords=["餐饮"]  # 应理解指餐饮支出
@@ -89,15 +89,15 @@ class TestP0Clarification(IntegrationTestBase):
         
         print("\n--- 轮3：继续对比 ---")
         await self.run_test(
-            test_id="TC072",
+            test_id="TC123",
             test_name="多轮对话 - 第3轮",
             message="比上个月多还是少？",
             expected_keywords=["餐饮", "上个月"]  # 应理解是对比餐饮支出
         )
     
-    async def test_tc073_clarification_execution(self):
+    async def test_tc124_clarification_execution(self):
         """
-        TC073: 澄清后的执行验证
+        TC124: 澄清后的执行验证
         
         验证点：
         1. 第1轮：缺少信息，发起澄清
@@ -109,7 +109,7 @@ class TestP0Clarification(IntegrationTestBase):
         """
         print("\n--- 轮1：发起记账，缺少金额和人员 ---")
         await self.run_test(
-            test_id="TC073-1",
+            test_id="TC124-1",
             test_name="澄清流程 - 第1轮（发起）",
             message="记账：买了书",
             expected_keywords=["多少", "金额"]  # 应询问金额
@@ -119,7 +119,7 @@ class TestP0Clarification(IntegrationTestBase):
         
         print("\n--- 轮2：补充金额，仍缺人员 ---")
         await self.run_test(
-            test_id="TC073-2",
+            test_id="TC124-2",
             test_name="澄清流程 - 第2轮（补充金额）",
             message="50元",
             expected_keywords=["谁", "给谁"]  # 应询问给谁买的
@@ -129,7 +129,7 @@ class TestP0Clarification(IntegrationTestBase):
         
         print("\n--- 轮3：补充人员，完整执行 ---")
         await self.run_test(
-            test_id="TC073",
+            test_id="TC124",
             test_name="澄清流程 - 第3轮（完成）",
             message="大女儿",
             expected_keywords=["记录", "50"]  # 应确认记录成功
@@ -163,16 +163,16 @@ async def main():
     
     try:
         # 运行所有测试
-        await tester.test_tc070_multi_field_clarification()
+        await tester.test_tc121_multi_field_clarification()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc071_provide_options()
+        await tester.test_tc122_provide_options()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc072_multi_turn_context()
+        await tester.test_tc123_multi_turn_context()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc073_clarification_execution()
+        await tester.test_tc124_clarification_execution()
         
         # 打印总结
         tester.print_summary()

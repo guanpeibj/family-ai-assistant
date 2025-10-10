@@ -2,7 +2,7 @@
 """
 P1 集成测试 - 高级查询功能
 
-测试用例：TC019 - TC022
+测试用例：TC181 - TC184
 优先级：P1（重要功能）
 
 功能覆盖：
@@ -61,9 +61,9 @@ class TestP1AdvancedQuery(IntegrationTestBase):
         print("--- 测试数据准备完成 ---\n")
         await asyncio.sleep(0.5)
     
-    async def test_tc019_expense_trend_analysis(self):
+    async def test_tc181_expense_trend_analysis(self):
         """
-        TC019: 支出趋势分析
+        TC181: 支出趋势分析
         
         验证点：
         1. AI识别查询异常的意图
@@ -74,15 +74,15 @@ class TestP1AdvancedQuery(IntegrationTestBase):
         await self._prepare_rich_test_data()
         
         await self.run_test(
-            test_id="TC019",
+            test_id="TC181",
             test_name="支出趋势分析",
             message="本月支出有什么异常吗？",
             expected_keywords=["支出"]  # AI可能识别异常或说明正常
         )
     
-    async def test_tc020_monthly_comparison(self):
+    async def test_tc182_monthly_comparison(self):
         """
-        TC020: 月度对比分析
+        TC182: 月度对比分析
         
         验证点：
         1. AI理解对比两个月的意图
@@ -92,15 +92,15 @@ class TestP1AdvancedQuery(IntegrationTestBase):
         5. 可能按类目细分对比
         """
         await self.run_test(
-            test_id="TC020",
+            test_id="TC182",
             test_name="月度对比分析",
             message="这个月比上个月多花了多少？",
             expected_keywords=["支出"]  # 应返回对比数据
         )
     
-    async def test_tc021_multi_dimension_query(self):
+    async def test_tc183_multi_dimension_query(self):
         """
-        TC021: 多维度组合查询
+        TC183: 多维度组合查询
         
         验证点：
         1. AI理解复合筛选条件
@@ -110,15 +110,15 @@ class TestP1AdvancedQuery(IntegrationTestBase):
         5. 三维交叉过滤准确
         """
         await self.run_test(
-            test_id="TC021",
+            test_id="TC183",
             test_name="多维度组合查询",
             message="9月份大女儿的教育支出",
             expected_keywords=["教育", "大女儿"]
         )
     
-    async def test_tc022_spending_pattern_recognition(self):
+    async def test_tc184_spending_pattern_recognition(self):
         """
-        TC022: 支出模式识别
+        TC184: 支出模式识别
         
         验证点：
         1. AI分析整体支出分布
@@ -128,7 +128,7 @@ class TestP1AdvancedQuery(IntegrationTestBase):
         5. 可能提供优化建议
         """
         await self.run_test(
-            test_id="TC022",
+            test_id="TC184",
             test_name="支出模式识别",
             message="我们家主要花钱在哪些方面？",
             expected_keywords=["支出", "主要"]
@@ -149,16 +149,16 @@ async def main():
         return 1
     
     try:
-        await tester.test_tc019_expense_trend_analysis()
+        await tester.test_tc181_expense_trend_analysis()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc020_monthly_comparison()
+        await tester.test_tc182_monthly_comparison()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc021_multi_dimension_query()
+        await tester.test_tc183_multi_dimension_query()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc022_spending_pattern_recognition()
+        await tester.test_tc184_spending_pattern_recognition()
         
         tester.print_summary()
         return 0

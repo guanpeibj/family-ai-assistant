@@ -2,7 +2,7 @@
 """
 P1 集成测试 - 深度分析能力
 
-测试用例：TC086 - TC089
+测试用例：TC341 - TC344
 优先级：P1（重要功能）
 
 功能覆盖：
@@ -51,9 +51,9 @@ class TestP1DeepAnalysis(IntegrationTestBase):
         print("--- 数据准备完成 ---\n")
         await asyncio.sleep(0.5)
     
-    async def test_tc086_financial_health_analysis(self):
+    async def test_tc341_financial_health_analysis(self):
         """
-        TC086: 财务健康综合分析
+        TC341: 财务健康综合分析
         
         验证点：
         1. 分析收支平衡
@@ -65,15 +65,15 @@ class TestP1DeepAnalysis(IntegrationTestBase):
         await self._prepare_comprehensive_data()
         
         await self.run_test(
-            test_id="TC086",
+            test_id="TC341",
             test_name="财务健康综合分析",
             message="分析我们家的财务状况",
             expected_keywords=["财务", "支出", "收入"]
         )
     
-    async def test_tc087_growth_development_assessment(self):
+    async def test_tc342_growth_development_assessment(self):
         """
-        TC087: 成长发育评估
+        TC342: 成长发育评估
         
         验证点：
         1. 综合身高、体重等数据
@@ -91,7 +91,7 @@ class TestP1DeepAnalysis(IntegrationTestBase):
         
         for record in health_records:
             await self.run_test(
-                test_id="TC087-setup",
+                test_id="TC342-setup",
                 test_name="记录健康数据",
                 message=record,
                 expected_keywords=["记录"]
@@ -102,15 +102,15 @@ class TestP1DeepAnalysis(IntegrationTestBase):
         
         print("\n--- 主测试：成长评估 ---")
         await self.run_test(
-            test_id="TC087",
+            test_id="TC342",
             test_name="成长发育评估",
             message="评估一下儿子的成长发育情况",
             expected_keywords=["儿子", "身高", "体重"]
         )
     
-    async def test_tc088_spending_pattern_recognition(self):
+    async def test_tc343_spending_pattern_recognition(self):
         """
-        TC088: 家庭支出模式识别
+        TC343: 家庭支出模式识别
         
         验证点：
         1. 分析时间分布（月初/月末、工作日/周末）
@@ -120,15 +120,15 @@ class TestP1DeepAnalysis(IntegrationTestBase):
         5. 建议优化方向
         """
         await self.run_test(
-            test_id="TC088",
+            test_id="TC343",
             test_name="家庭支出模式识别",
             message="我们家主要在什么时候花钱比较多？",
             expected_keywords=["支出", "时间"]
         )
     
-    async def test_tc089_optimization_recommendations(self):
+    async def test_tc344_optimization_recommendations(self):
         """
-        TC089: 优化建议生成
+        TC344: 优化建议生成
         
         验证点：
         1. 基于支出分析
@@ -138,7 +138,7 @@ class TestP1DeepAnalysis(IntegrationTestBase):
         5. 优先级排序
         """
         await self.run_test(
-            test_id="TC089",
+            test_id="TC344",
             test_name="优化建议生成",
             message="有什么省钱建议吗？",
             expected_keywords=["建议", "支出"]
@@ -159,16 +159,16 @@ async def main():
         return 1
     
     try:
-        await tester.test_tc086_financial_health_analysis()
+        await tester.test_tc341_financial_health_analysis()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc087_growth_development_assessment()
+        await tester.test_tc342_growth_development_assessment()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc088_spending_pattern_recognition()
+        await tester.test_tc343_spending_pattern_recognition()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc089_optimization_recommendations()
+        await tester.test_tc344_optimization_recommendations()
         
         tester.print_summary()
         return 0

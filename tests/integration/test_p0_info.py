@@ -2,7 +2,7 @@
 """
 P0 集成测试 - 基础信息管理功能
 
-测试用例：TC052 - TC055
+测试用例：TC101 - TC104
 优先级：P0（核心必测）
 
 功能覆盖：
@@ -22,9 +22,9 @@ class TestP0Info(IntegrationTestBase):
     def __init__(self):
         super().__init__(test_suite_name="p0_info")
     
-    async def test_tc052_store_important_info(self):
+    async def test_tc101_store_important_info(self):
         """
-        TC052: 存储重要信息
+        TC101: 存储重要信息
         
         验证点：
         1. AI理解存储重要信息的意图
@@ -40,16 +40,16 @@ class TestP0Info(IntegrationTestBase):
             )
         
         await self.run_test(
-            test_id="TC052",
+            test_id="TC101",
             test_name="存储重要信息 - WiFi密码",
             message="记一下，家里WiFi密码是abc123456",
             expected_keywords=["记录", "密码"],
             verify_db=verify
         )
     
-    async def test_tc053_update_important_info(self):
+    async def test_tc102_update_important_info(self):
         """
-        TC053: 更新重要信息
+        TC102: 更新重要信息
         
         验证点：
         1. AI识别这是对已有信息的更新
@@ -58,7 +58,7 @@ class TestP0Info(IntegrationTestBase):
         4. 旧记录被标记为过期或被替换
         """
         await self.run_test(
-            test_id="TC053",
+            test_id="TC102",
             test_name="更新重要信息 - WiFi密码",
             message="WiFi密码改成xyz789了",
             expected_keywords=["更新", "修改", "改", "密码"]
@@ -67,9 +67,9 @@ class TestP0Info(IntegrationTestBase):
         # 验证只有一条有效的WiFi密码记录
         print("\n提示：应该更新记录而非新增，或标记旧记录为过期")
     
-    async def test_tc054_query_sensitive_info_privacy(self):
+    async def test_tc103_query_sensitive_info_privacy(self):
         """
-        TC054: 查询敏感信息（隐私保护）
+        TC103: 查询敏感信息（隐私保护）
         
         验证点：
         1. AI理解查询WiFi密码的意图
@@ -78,7 +78,7 @@ class TestP0Info(IntegrationTestBase):
         4. 可能包含隐私风险提示
         """
         await self.run_test(
-            test_id="TC054",
+            test_id="TC103",
             test_name="查询敏感信息 - 隐私保护",
             message="WiFi密码是多少？",
             expected_keywords=["密码"]  # 应返回xyz789
@@ -86,9 +86,9 @@ class TestP0Info(IntegrationTestBase):
         
         print("\n提示：配置类查询必须查数据库，不能依赖对话历史")
     
-    async def test_tc055_info_change_tracking(self):
+    async def test_tc104_info_change_tracking(self):
         """
-        TC055: 重要信息变更追踪
+        TC104: 重要信息变更追踪
         
         验证点：
         1. 先存储钥匙位置（沙发下）
@@ -103,7 +103,7 @@ class TestP0Info(IntegrationTestBase):
         """
         print("\n--- 步骤1：首次记录 ---")
         await self.run_test(
-            test_id="TC055-1",
+            test_id="TC104-1",
             test_name="首次记录钥匙位置",
             message="帮我记录：我把大门钥匙放在沙发的垫子下面了",
             expected_keywords=["记录", "钥匙"]
@@ -113,7 +113,7 @@ class TestP0Info(IntegrationTestBase):
         
         print("\n--- 步骤2：更新位置 ---")
         await self.run_test(
-            test_id="TC055-2",
+            test_id="TC104-2",
             test_name="更新钥匙位置",
             message="大门钥匙放到衣柜上面了",
             expected_keywords=["钥匙"]
@@ -123,7 +123,7 @@ class TestP0Info(IntegrationTestBase):
         
         print("\n--- 步骤3：查询最新位置 ---")
         await self.run_test(
-            test_id="TC055",
+            test_id="TC104",
             test_name="查询最新钥匙位置",
             message="大门钥匙放哪了？",
             expected_keywords=["钥匙", "衣柜"],  # 应返回"衣柜上"
@@ -147,16 +147,16 @@ async def main():
     
     try:
         # 运行所有测试
-        await tester.test_tc052_store_important_info()
+        await tester.test_tc101_store_important_info()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc053_update_important_info()
+        await tester.test_tc102_update_important_info()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc054_query_sensitive_info_privacy()
+        await tester.test_tc103_query_sensitive_info_privacy()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc055_info_change_tracking()
+        await tester.test_tc104_info_change_tracking()
         
         # 打印总结
         tester.print_summary()

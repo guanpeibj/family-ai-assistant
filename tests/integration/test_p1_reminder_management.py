@@ -2,7 +2,7 @@
 """
 P1 集成测试 - 提醒管理功能
 
-测试用例：TC044 - TC048
+测试用例：TC241 - TC245
 优先级：P1（重要功能）
 
 功能覆盖：
@@ -45,9 +45,9 @@ class TestP1ReminderManagement(IntegrationTestBase):
         print("--- 提醒创建完成 ---\n")
         await asyncio.sleep(0.5)
     
-    async def test_tc044_query_upcoming_reminders(self):
+    async def test_tc241_query_upcoming_reminders(self):
         """
-        TC044: 查询即将到来的提醒
+        TC241: 查询即将到来的提醒
         
         验证点：
         1. AI理解查询未来提醒的意图
@@ -58,15 +58,15 @@ class TestP1ReminderManagement(IntegrationTestBase):
         await self._setup_reminders()
         
         await self.run_test(
-            test_id="TC044",
+            test_id="TC241",
             test_name="查询即将到来的提醒",
             message="最近有什么事要做？",
             expected_keywords=["提醒"]
         )
     
-    async def test_tc045_query_all_reminders(self):
+    async def test_tc242_query_all_reminders(self):
         """
-        TC045: 查询所有提醒
+        TC242: 查询所有提醒
         
         验证点：
         1. AI理解查询所有提醒的意图
@@ -75,15 +75,15 @@ class TestP1ReminderManagement(IntegrationTestBase):
         4. 可能按类型或时间分组
         """
         await self.run_test(
-            test_id="TC045",
+            test_id="TC242",
             test_name="查询所有提醒",
             message="我设置了哪些提醒？",
             expected_keywords=["提醒"]
         )
     
-    async def test_tc046_modify_reminder_time(self):
+    async def test_tc243_modify_reminder_time(self):
         """
-        TC046: 修改提醒时间
+        TC243: 修改提醒时间
         
         验证点：
         1. AI理解修改提醒的意图
@@ -92,15 +92,15 @@ class TestP1ReminderManagement(IntegrationTestBase):
         4. 确认修改成功
         """
         await self.run_test(
-            test_id="TC046",
+            test_id="TC243",
             test_name="修改提醒时间",
             message="大女儿打疫苗改到12号",
             expected_keywords=["12号", "改", "修改"]
         )
     
-    async def test_tc047_cancel_reminder(self):
+    async def test_tc244_cancel_reminder(self):
         """
-        TC047: 取消提醒
+        TC244: 取消提醒
         
         验证点：
         1. AI理解取消提醒的意图
@@ -109,15 +109,15 @@ class TestP1ReminderManagement(IntegrationTestBase):
         4. 确认取消成功
         """
         await self.run_test(
-            test_id="TC047",
+            test_id="TC244",
             test_name="取消提醒",
             message="取消儿子的复查提醒",
             expected_keywords=["取消", "儿子"]
         )
     
-    async def test_tc048_mark_reminder_completed(self):
+    async def test_tc245_mark_reminder_completed(self):
         """
-        TC048: 提醒完成标记
+        TC245: 提醒完成标记
         
         验证点：
         1. AI理解任务已完成的陈述
@@ -126,7 +126,7 @@ class TestP1ReminderManagement(IntegrationTestBase):
         4. 确认完成
         """
         await self.run_test(
-            test_id="TC048",
+            test_id="TC245",
             test_name="提醒完成标记",
             message="今天已经给大女儿打了疫苗",
             expected_keywords=["大女儿", "疫苗"]
@@ -147,19 +147,19 @@ async def main():
         return 1
     
     try:
-        await tester.test_tc044_query_upcoming_reminders()
+        await tester.test_tc241_query_upcoming_reminders()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc045_query_all_reminders()
+        await tester.test_tc242_query_all_reminders()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc046_modify_reminder_time()
+        await tester.test_tc243_modify_reminder_time()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc047_cancel_reminder()
+        await tester.test_tc244_cancel_reminder()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc048_mark_reminder_completed()
+        await tester.test_tc245_mark_reminder_completed()
         
         tester.print_summary()
         return 0

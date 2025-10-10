@@ -2,7 +2,7 @@
 """
 P1 集成测试 - 主动分析能力
 
-测试用例：TC082 - TC085
+测试用例：TC321 - TC324
 优先级：P1（重要功能）
 
 功能覆盖：
@@ -22,9 +22,9 @@ class TestP1ProactiveAnalysis(IntegrationTestBase):
     def __init__(self):
         super().__init__(test_suite_name="p1_proactive")
     
-    async def test_tc082_automatic_budget_warning(self):
+    async def test_tc321_automatic_budget_warning(self):
         """
-        TC082: 自动预算警告
+        TC321: 自动预算警告
         
         验证点：
         1. 检测本月支出达到预算82%
@@ -36,7 +36,7 @@ class TestP1ProactiveAnalysis(IntegrationTestBase):
         """
         print("\n--- 步骤1：设置预算 ---")
         await self.run_test(
-            test_id="TC082-1",
+            test_id="TC321-1",
             test_name="设置预算",
             message="设置本月预算5000元",
             expected_keywords=["设置", "预算"]
@@ -56,7 +56,7 @@ class TestP1ProactiveAnalysis(IntegrationTestBase):
         
         for expense in expenses:
             await self.run_test(
-                test_id="TC082-2",
+                test_id="TC321-2",
                 test_name="记录支出",
                 message=expense,
                 expected_keywords=["记录"]
@@ -67,15 +67,15 @@ class TestP1ProactiveAnalysis(IntegrationTestBase):
         
         print("\n--- 步骤3：再记录一笔，触发预算警告 ---")
         await self.run_test(
-            test_id="TC082",
+            test_id="TC321",
             test_name="触发预算警告",
             message="看电影200元",
             expected_keywords=["记录"]  # 可能包含预算提示
         )
     
-    async def test_tc083_anomaly_expense_detection(self):
+    async def test_tc322_anomaly_expense_detection(self):
         """
-        TC083: 异常支出检测
+        TC322: 异常支出检测
         
         验证点：
         1. 识别大额支出（>平均月支出20%）
@@ -84,15 +84,15 @@ class TestP1ProactiveAnalysis(IntegrationTestBase):
         4. 正常记录
         """
         await self.run_test(
-            test_id="TC083",
+            test_id="TC322",
             test_name="异常支出检测",
             message="记账：维修车1500元",
             expected_keywords=["记录", "1500"]  # AI可能提示"大额"
         )
     
-    async def test_tc084_category_growth_alert(self):
+    async def test_tc323_category_growth_alert(self):
         """
-        TC084: 类目增长提醒
+        TC323: 类目增长提醒
         
         验证点：
         1. 检测医疗支出本月比上月增长40%
@@ -111,7 +111,7 @@ class TestP1ProactiveAnalysis(IntegrationTestBase):
         
         for i, expense in enumerate(medical_expenses, 1):
             await self.run_test(
-                test_id=f"TC084-{i}",
+                test_id=f"TC323-{i}",
                 test_name=f"医疗支出 {i}/3",
                 message=expense,
                 expected_keywords=["记录"]
@@ -120,15 +120,15 @@ class TestP1ProactiveAnalysis(IntegrationTestBase):
         
         print("\n--- 再记录一笔，可能触发增长提醒 ---")
         await self.run_test(
-            test_id="TC084",
+            test_id="TC323",
             test_name="触发类目增长提醒",
             message="给大女儿买感冒药60元",
             expected_keywords=["记录"]  # 可能提示医疗支出增长
         )
     
-    async def test_tc085_upcoming_due_reminder(self):
+    async def test_tc324_upcoming_due_reminder(self):
         """
-        TC085: 即将到期提醒
+        TC324: 即将到期提醒
         
         验证点：
         1. 设置明天的提醒
@@ -138,7 +138,7 @@ class TestP1ProactiveAnalysis(IntegrationTestBase):
         """
         print("\n--- 步骤1：设置明天的提醒 ---")
         await self.run_test(
-            test_id="TC085-1",
+            test_id="TC324-1",
             test_name="设置明天提醒",
             message="明天提醒我给儿子打疫苗",
             expected_keywords=["提醒", "明天"]
@@ -148,7 +148,7 @@ class TestP1ProactiveAnalysis(IntegrationTestBase):
         
         print("\n--- 步骤2：查询明天的事 ---")
         await self.run_test(
-            test_id="TC085",
+            test_id="TC324",
             test_name="查询即将到期提醒",
             message="明天有什么事？",
             expected_keywords=["明天", "疫苗", "儿子"]
@@ -169,16 +169,16 @@ async def main():
         return 1
     
     try:
-        await tester.test_tc082_automatic_budget_warning()
+        await tester.test_tc321_automatic_budget_warning()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc083_anomaly_expense_detection()
+        await tester.test_tc322_anomaly_expense_detection()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc084_category_growth_alert()
+        await tester.test_tc323_category_growth_alert()
         await asyncio.sleep(0.5)
         
-        await tester.test_tc085_upcoming_due_reminder()
+        await tester.test_tc324_upcoming_due_reminder()
         
         tester.print_summary()
         return 0

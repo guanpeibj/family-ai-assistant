@@ -2,7 +2,7 @@
 """
 P2 集成测试 - 综合场景测试
 
-测试用例：TC113 - TC116
+测试用例：TC481 - TC484
 优先级：P2（增强功能）
 
 功能覆盖：
@@ -22,9 +22,9 @@ class TestP2ComprehensiveScenarios(IntegrationTestBase):
     def __init__(self):
         super().__init__(test_suite_name="p2_comprehensive")
     
-    async def test_tc113_sick_child_complete_flow(self):
+    async def test_tc481_sick_child_complete_flow(self):
         """
-        TC113: 孩子生病完整流程
+        TC481: 孩子生病完整流程
         
         验证点：
         1. 记录生病状况
@@ -45,7 +45,7 @@ class TestP2ComprehensiveScenarios(IntegrationTestBase):
         for i, (message, label) in enumerate(steps, 1):
             print(f"\n步骤{i}/{len(steps)}: {label}")
             await self.run_test(
-                test_id=f"TC113-{i}",
+                test_id=f"TC481-{i}",
                 test_name=f"生病流程 - {label}",
                 message=message,
                 expected_keywords=[]
@@ -54,9 +54,9 @@ class TestP2ComprehensiveScenarios(IntegrationTestBase):
         
         print("\n✅ 完整流程测试完成")
     
-    async def test_tc114_vaccine_complete_flow(self):
+    async def test_tc482_vaccine_complete_flow(self):
         """
-        TC114: 疫苗接种流程
+        TC482: 疫苗接种流程
         
         验证点：
         1. 查询疫苗记录
@@ -76,7 +76,7 @@ class TestP2ComprehensiveScenarios(IntegrationTestBase):
         for i, (message, label) in enumerate(steps, 1):
             print(f"\n步骤{i}/{len(steps)}: {label}")
             await self.run_test(
-                test_id=f"TC114-{i}",
+                test_id=f"TC482-{i}",
                 test_name=f"疫苗流程 - {label}",
                 message=message,
                 expected_keywords=[]
@@ -85,9 +85,9 @@ class TestP2ComprehensiveScenarios(IntegrationTestBase):
         
         print("\n✅ 完整流程测试完成")
     
-    async def test_tc115_family_travel_scenario(self):
+    async def test_tc483_family_travel_scenario(self):
         """
-        TC115: 家庭旅行场景
+        TC483: 家庭旅行场景
         
         验证点：
         1. 计划旅行并设置预算
@@ -99,7 +99,7 @@ class TestP2ComprehensiveScenarios(IntegrationTestBase):
         
         # 计划
         await self.run_test(
-            test_id="TC115-1",
+            test_id="TC483-1",
             test_name="旅行计划",
             message="记一下，下个月5号到10号全家去三亚旅行，预算5000元",
             expected_keywords=["记录", "三亚"]
@@ -119,7 +119,7 @@ class TestP2ComprehensiveScenarios(IntegrationTestBase):
         
         for i, expense in enumerate(travel_expenses, 1):
             await self.run_test(
-                test_id=f"TC115-{i+1}",
+                test_id=f"TC483-{i+1}",
                 test_name=f"旅行支出 {i}/5",
                 message=expense,
                 expected_keywords=["记录"]
@@ -130,15 +130,15 @@ class TestP2ComprehensiveScenarios(IntegrationTestBase):
         
         # 总结
         await self.run_test(
-            test_id="TC115",
+            test_id="TC483",
             test_name="旅行总结",
             message="旅行花了多少钱？在预算内吗？",
             expected_keywords=["支出", "预算"]
         )
     
-    async def test_tc116_multi_user_collaboration(self):
+    async def test_tc484_multi_user_collaboration(self):
         """
-        TC116: 多人协作记账
+        TC484: 多人协作记账
         
         验证点：
         1. 不同用户记录支出
@@ -151,7 +151,7 @@ class TestP2ComprehensiveScenarios(IntegrationTestBase):
         print("注：简化测试，使用同一用户模拟")
         
         await self.run_test(
-            test_id="TC116-1",
+            test_id="TC484-1",
             test_name="用户A记账",
             message="今天买菜80元",
             expected_keywords=["记录"]
@@ -160,7 +160,7 @@ class TestP2ComprehensiveScenarios(IntegrationTestBase):
         await asyncio.sleep(0.3)
         
         await self.run_test(
-            test_id="TC116-2",
+            test_id="TC484-2",
             test_name="用户B记账",
             message="给孩子交学费2000元",
             expected_keywords=["记录"]
@@ -169,7 +169,7 @@ class TestP2ComprehensiveScenarios(IntegrationTestBase):
         await asyncio.sleep(0.5)
         
         await self.run_test(
-            test_id="TC116",
+            test_id="TC484",
             test_name="家庭汇总查询",
             message="这个月一共花了多少？",
             expected_keywords=["支出"]
@@ -190,16 +190,16 @@ async def main():
         return 1
     
     try:
-        await tester.test_tc113_sick_child_complete_flow()
+        await tester.test_tc481_sick_child_complete_flow()
         await asyncio.sleep(1)
         
-        await tester.test_tc114_vaccine_complete_flow()
+        await tester.test_tc482_vaccine_complete_flow()
         await asyncio.sleep(1)
         
-        await tester.test_tc115_family_travel_scenario()
+        await tester.test_tc483_family_travel_scenario()
         await asyncio.sleep(1)
         
-        await tester.test_tc116_multi_user_collaboration()
+        await tester.test_tc484_multi_user_collaboration()
         
         tester.print_summary()
         return 0
