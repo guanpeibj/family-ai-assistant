@@ -100,9 +100,27 @@ async def derive_for_attachments(attachments: List[Dict[str, Any]]) -> List[Dict
                     # 将图片以 data URL 形式发送（小图可行；大图建议外链）。
                     with open(a['path'], 'rb') as imgf:
                         b64 = base64.b64encode(imgf.read()).decode('utf-8')
+                    # 优化的 Vision prompt：针对支付截图识别
                     user_content = [
-                        {"type": "input_text", "text": "请阅读图片并提取关键信息（金额、日期、项目、人物等），输出简短摘要。"},
-                        {"type": "input_image", "image_url": f"data:{a.get('mime','image/png')};base64,{b64}"}
+                        {"type": "text", "text": """请分析这张图片，识别以下信息：
+
+**如果是支付信息（支付截图、小票、账单）**：
+- 金额（必填，仅数字）
+- 日期时间（格式：YYYY-MM-DD HH:mm）
+- 商家/收款方名称
+- 支付方式（支付宝/微信/银行卡/现金）
+- 商品/服务类别（从以下选择：餐饮、交通、医疗、教育、娱乐、居住、服饰、日用、其他）
+
+**如果是其他类型图片**：
+- 简要描述图片内容
+- 提取关键信息（人物、地点、物品等）
+
+请以简洁的自然语言输出，例如：
+"支付宝支付，星巴克，78元，餐饮类，2025-10-10 14:30"
+或
+"家庭照片，三个孩子在公园玩耍"
+"""},
+                        {"type": "image_url", "image_url": {"url": f"data:{a.get('mime','image/png')};base64,{b64}"}}
                     ]
                     # 兼容 openai-vision 的 chat.completions 风格
                     try:
