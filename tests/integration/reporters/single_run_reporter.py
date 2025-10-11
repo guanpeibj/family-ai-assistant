@@ -3,10 +3,17 @@
 """
 
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any
 from validators.scoring import TestScore, TestSuiteSummary
+
+# 添加项目根目录到路径
+project_root = Path(__file__).parent.parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+from tests.integration.version_tracker import VersionTracker
 
 
 class SingleRunReporter:
@@ -33,9 +40,13 @@ class SingleRunReporter:
         Returns:
             报告文件路径
         """
+        # 收集版本信息
+        version_info = VersionTracker.get_version_info()
+        
         report = {
             "test_run_id": run_id,
             "timestamp": datetime.now().isoformat(),
+            "version_info": version_info,  # ✅ 新增：完整的版本信息
             "config": config,
             "summary": summary.to_dict(),
             "test_scores": [score.to_dict() for score in test_scores],
@@ -87,6 +98,7 @@ class SingleRunReporter:
         summary = report["summary"]
         config = report["config"]
         perf = report["performance"]
+        version_info = report.get("version_info", {})
         
         lines = []
         lines.append("=" * 80)
@@ -95,6 +107,25 @@ class SingleRunReporter:
         lines.append(f"运行ID: {report['test_run_id']}")
         lines.append(f"时间: {report['timestamp']}")
         lines.append("")
+        
+        # ✅ 新增：版本信息部分
+        if version_info:
+            lines.append("版本信息:")
+            lines.append(f"  测试时间: {version_info.get('test_date', 'N/A')}")
+            
+            # 主LLM
+            llm = version_info.get('llm', {})
+            lines.append(f"  主项目LLM: {llm.get('provider', 'N/A')} / {llm.get('model', 'N/A')}")
+            lines.append(f"  Embedding: {llm.get('embedding_provider', 'N/A')} / {llm.get('embedding_model', 'N/A')}")
+            
+            # 评估器LLM
+            eval_llm = version_info.get('evaluator_llm', {})
+            lines.append(f"  评估器LLM: {eval_llm.get('model', 'N/A')}")
+            
+            # Prompts版本
+            prompts = version_info.get('prompts', {})
+            lines.append(f"  Prompts版本: {prompts.get('version', 'N/A')} ({prompts.get('current_profile', 'N/A')})")
+            lines.append("")
         
         lines.append("配置信息:")
         for key, value in config.items():

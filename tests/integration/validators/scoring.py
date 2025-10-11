@@ -34,6 +34,15 @@ class TestScore:
     success: bool
     issues: List[str]
     
+    # ✅ 对话记录（支持单轮和多轮）
+    # 格式：["user(user_id)- xxx", "faa- xxx", "user(user_id)- yyy", "faa- yyy"]
+    conversation: List[str] = None
+    
+    def __post_init__(self):
+        """确保conversation始终是列表"""
+        if self.conversation is None:
+            self.conversation = []
+    
     def to_dict(self) -> Dict:
         return asdict(self)
     
@@ -89,7 +98,8 @@ class ScoringSystem:
         data_result: Dict,
         intelligence_result: Dict,
         experience_result: Dict,
-        duration: float
+        duration: float,
+        conversation: List[str] = None
     ) -> TestScore:
         """
         计算单个测试的评分
@@ -101,6 +111,7 @@ class ScoringSystem:
             intelligence_result: 智能层评估结果
             experience_result: 体验层评估结果
             duration: 耗时（秒）
+            conversation: 对话记录列表
             
         Returns:
             TestScore对象
@@ -131,7 +142,8 @@ class ScoringSystem:
             experience_details=experience_result.get("dimensions", {}),
             duration=duration,
             success=success,
-            issues=issues
+            issues=issues,
+            conversation=conversation or []
         )
     
     @staticmethod

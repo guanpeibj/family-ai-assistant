@@ -9,9 +9,10 @@
 
 import sys
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from datetime import datetime, timedelta
 from decimal import Decimal
+import uuid
 
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
@@ -45,8 +46,18 @@ class DataVerificationResult:
 class DataValidator:
     """数据层验证器"""
     
-    def __init__(self, user_id: str):
-        self.user_id = user_id
+    def __init__(self, user_id: Union[str, uuid.UUID]):
+        """
+        初始化数据验证器
+        
+        Args:
+            user_id: 用户ID（可以是字符串或UUID对象）
+        """
+        # 如果是字符串，转换为UUID对象用于数据库查询
+        if isinstance(user_id, str):
+            self.user_id = uuid.UUID(user_id)
+        else:
+            self.user_id = user_id
         
     async def verify(
         self,

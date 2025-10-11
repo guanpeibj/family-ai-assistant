@@ -61,10 +61,51 @@ class ExperienceEvaluationResult:
 class AIEvaluator:
     """AI评估员"""
     
-    def __init__(self, use_cache: bool = True):
-        self.llm_client = LLMClient()
+    def __init__(self, use_cache: bool = True, evaluator_model: str = "gpt-4o-mini"):
+        """
+        初始化AI评估员
+        
+        Args:
+            use_cache: 是否使用缓存
+            evaluator_model: 评估器使用的模型（默认gpt-4o-mini，成本低且效果好）
+        """
+        # 创建专用的评估器LLM客户端
+        self.llm_client = self._create_evaluator_client(evaluator_model)
+        self.evaluator_model = evaluator_model
         self.use_cache = use_cache
         self._cache = {}
+        
+    def _create_evaluator_client(self, model: str) -> LLMClient:
+        """
+        创建评估器专用的LLM客户端
+        
+        使用OpenAI的gpt-4o-mini作为评估器，原因：
+        1. 成本低（比主模型便宜很多）
+        2. 评估能力足够（理解测试要求+打分）
+        3. 速度快
+        """
+        import os
+        from src.core.config import settings
+        
+        # 临时修改环境变量，创建专用客户端
+        original_provider = settings.AI_PROVIDER
+        original_model = settings.OPENAI_MODEL
+        original_base_url = settings.OPENAI_BASE_URL
+        
+        try:
+            # 使用OpenAI官方API作为评估器
+            settings.AI_PROVIDER = "openai_compatible"
+            settings.OPENAI_MODEL = model
+            settings.OPENAI_BASE_URL = "https://api.openai.com/v1"
+            
+            client = LLMClient()
+            
+            return client
+        finally:
+            # 恢复原始设置
+            settings.AI_PROVIDER = original_provider
+            settings.OPENAI_MODEL = original_model
+            settings.OPENAI_BASE_URL = original_base_url
         
     async def evaluate_intelligence(
         self,
@@ -94,10 +135,11 @@ class AIEvaluator:
         
         try:
             # 调用评估员（使用gpt-4o-mini降低成本）
-            response = await self.llm_client.simple_call(
-                prompt,
-                model="gpt-4o-mini",
-                temperature=0.3  # 低温度保证评分一致性
+            response = await self.llm_client.chat_text(
+                system_prompt="你是一个专业的AI评估员，负责评估AI助手的回复质量。请严格按照评分标准进行客观评估。",
+                user_prompt=prompt,
+                temperature=0.3,  # 低温度保证评分一致性
+                max_tokens=1000
             )
             
             # 解析结果
@@ -160,10 +202,11 @@ class AIEvaluator:
         
         try:
             # 调用评估员
-            response = await self.llm_client.simple_call(
-                prompt,
-                model="gpt-4o-mini",
-                temperature=0.3
+            response = await self.llm_client.chat_text(
+                system_prompt="你是一个专业的AI评估员，负责评估AI助手的用户体验质量。请严格按照评分标准进行客观评估。",
+                user_prompt=prompt,
+                temperature=0.3,
+                max_tokens=1000
             )
             
             # 解析结果

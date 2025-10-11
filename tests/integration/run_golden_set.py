@@ -27,31 +27,42 @@ class GoldenSetRunner(IntegrationTestBase):
         super().__init__(test_suite_name="golden_set")
         self.test_cases_file = test_cases_file
         self.test_cases = []
+        self.multi_turn_tests = []  # ✅ 新增：多轮对话测试
         
     def load_test_cases(self):
-        """加载测试用例"""
+        """加载测试用例（包括单轮和多轮）"""
         with open(self.test_cases_file, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f)
         
-        # 收集所有测试用例
+        # 收集单轮测试用例
         self.test_cases = []
-        for category_name, cases in data.items():
-            if isinstance(cases, list) and category_name not in ['test_suite_name', 'test_suite_version', 'total_cases']:
-                self.test_cases.extend(cases)
+        self.multi_turn_tests = []
         
-        print(f"✅ 加载了 {len(self.test_cases)} 个测试用例")
-        return len(self.test_cases)
+        for category_name, cases in data.items():
+            if isinstance(cases, list):
+                if category_name == 'multi_turn_tests':
+                    # ✅ 多轮对话测试
+                    self.multi_turn_tests.extend(cases)
+                elif category_name not in ['test_suite_name', 'test_suite_version', 'total_cases']:
+                    # 普通单轮测试
+                    self.test_cases.extend(cases)
+        
+        print(f"✅ 加载了 {len(self.test_cases)} 个单轮测试用例")
+        print(f"✅ 加载了 {len(self.multi_turn_tests)} 个多轮对话测试")
+        return len(self.test_cases) + len(self.multi_turn_tests)
     
-    async def run_all_tests(self, limit: int = None):
+    async def run_all_tests(self, limit: int = None, include_multi_turn: bool = True):
         """
-        运行所有测试用例
+        运行所有测试用例（单轮 + 多轮）
         
         Args:
             limit: 限制运行的用例数量（用于快速测试）
+            include_multi_turn: 是否包含多轮对话测试
         """
+        # 单轮测试
         cases_to_run = self.test_cases[:limit] if limit else self.test_cases
         
-        print(f"\n开始运行 {len(cases_to_run)} 个测试用例...")
+        print(f"\n开始运行 {len(cases_to_run)} 个单轮测试用例...")
         print("=" * 80)
         
         for i, test_case in enumerate(cases_to_run, 1):
@@ -69,14 +80,34 @@ class GoldenSetRunner(IntegrationTestBase):
             
             # 短暂延迟避免过快
             await asyncio.sleep(0.5)
+        
+        # ✅ 多轮对话测试
+        if include_multi_turn and self.multi_turn_tests:
+            print(f"\n\n开始运行 {len(self.multi_turn_tests)} 个多轮对话测试...")
+            print("=" * 80)
+            
+            for i, test_case in enumerate(self.multi_turn_tests, 1):
+                print(f"\n[多轮 {i}/{len(self.multi_turn_tests)}] 运行中...")
+                
+                await self.run_multi_turn_test(
+                    test_id=test_case['test_id'],
+                    test_name=test_case['test_name'],
+                    turns=test_case['turns'],
+                    context=test_case.get('context')
+                )
+                
+                # 多轮测试之间延迟更长，避免线程混乱
+                await asyncio.sleep(1.0)
 
 
 async def main():
     parser = argparse.ArgumentParser(description='运行FAA黄金测试集')
     parser.add_argument('--config', type=str, help='配置参数（JSON格式）')
-    parser.add_argument('--limit', type=int, help='限制运行的用例数量')
+    parser.add_argument('--limit', type=int, help='限制运行的用例数量（仅限单轮测试）')
     parser.add_argument('--output-dir', type=str, default='tests/integration/reports',
                        help='报告输出目录')
+    parser.add_argument('--no-multi-turn', action='store_true',
+                       help='跳过多轮对话测试（只运行单轮测试）')
     
     args = parser.parse_args()
     
@@ -114,7 +145,10 @@ async def main():
     
     try:
         # 运行测试
-        await runner.run_all_tests(limit=args.limit)
+        await runner.run_all_tests(
+            limit=args.limit,
+            include_multi_turn=not args.no_multi_turn
+        )
         
         # 打印总结
         print("\n" + "=" * 80)
@@ -123,20 +157,12 @@ async def main():
         
         summary_dict = runner.print_summary()
         
-        # 生成报告
-        output_dir = Path(args.output_dir)
-        report_file = SingleRunReporter.generate_report(
-            run_id=run_id,
-            config=config,
-            summary=runner.test_scores[0].__class__.__module__.split('.')[0] if runner.test_scores else None,
-            test_scores=runner.test_scores,
-            output_dir=output_dir
-        )
-        
-        # 需要重新生成正确的summary对象
+        # 生成正确的summary对象
         from validators.scoring import ScoringSystem
         summary = ScoringSystem.calculate_suite_summary(runner.test_scores)
         
+        # 生成报告
+        output_dir = Path(args.output_dir)
         report_file = SingleRunReporter.generate_report(
             run_id=run_id,
             config=config,

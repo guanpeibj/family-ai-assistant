@@ -1813,18 +1813,21 @@ class AIEngineV2:
                 'timestamp': datetime.now().isoformat()
             }
             
+            # 平铺entities到顶层（与单个store保持一致，确保amount/occurred_at在顶层）
+            entities = understanding.get('entities', {})
+            
             user_ai = {
                 **common,
                 'role': 'user',
                 'intent': understanding.get('intent'),
-                'entities': understanding.get('entities', {})
+                **entities,  # 平铺entities，不再嵌套
             }
             
             assistant_ai = {
                 **common,
                 'role': 'assistant',
                 'intent': understanding.get('intent'),
-                'entities': understanding.get('entities', {})
+                **entities,  # 平铺entities，不再嵌套
             }
             
             memories = [

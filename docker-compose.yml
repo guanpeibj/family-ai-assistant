@@ -64,6 +64,7 @@ services:
       - ./prompts:/app/prompts
       - ./alembic:/app/alembic
       - ./family_private_data.json:/app/family_private_data.json:ro
+      - ./.env:/app/.env:ro  # 挂载 .env 文件（只读）
       - media_data:/data/media
       - fastembed_cache:/data/fastembed_cache
     command: sh -c "/app/.venv/bin/alembic upgrade head && /app/.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload"
@@ -87,6 +88,7 @@ services:
     volumes:
       - ./mcp-server:/app/mcp-server
       - ./alembic:/app/alembic
+      - ./.env:/app/.env:ro  # 挂载 .env 文件（只读）
       - media_data:/data/media
       - fastembed_cache:/data/fastembed_cache
     command: python mcp-server/mcp_http_wrapper.py

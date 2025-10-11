@@ -63,10 +63,38 @@ class GenericMCPServer:
                 embedding_text = self._normalize_embedding(embedding)
                 
                 # 提取 AI 识别的金额和时间（如果有）
+                # 支持两种结构：平铺（amount在顶层）或嵌套（amount在entities中）
                 amount = ai_data.get('amount')
+                if amount is None and 'entities' in ai_data:
+                    amount = ai_data['entities'].get('amount')
+                
+                # 类型转换：确保amount是数字（支持字符串"80"转为数字80）
+                if amount is not None:
+                    if isinstance(amount, str):
+                        try:
+                            amount = float(amount)
+                        except (ValueError, TypeError):
+                            amount = None
+                    elif not isinstance(amount, (int, float)):
+                        try:
+                            amount = float(amount)
+                        except (ValueError, TypeError):
+                            amount = None
+                
+                # 提取occurred_at - 同样支持两种结构
                 occurred_at = ai_data.get('occurred_at')
+                if occurred_at is None and 'entities' in ai_data:
+                    occurred_at = ai_data['entities'].get('occurred_at')
+                
+                # 时间格式转换 - 支持多种ISO格式
                 if occurred_at and isinstance(occurred_at, str):
-                    occurred_at = datetime.fromisoformat(occurred_at)
+                    try:
+                        # 移除可能的'Z'后缀，替换为'+00:00'
+                        occurred_at_str = occurred_at.replace('Z', '+00:00')
+                        # 如果只有日期没有时间，fromisoformat会自动补充00:00:00
+                        occurred_at = datetime.fromisoformat(occurred_at_str)
+                    except (ValueError, TypeError):
+                        occurred_at = None
                 
                 # 插入记忆
                 memory_id = await conn.fetchval(

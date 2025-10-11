@@ -18,6 +18,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 import structlog
+import uuid
 
 # 添加项目根目录到路径
 project_root = Path(__file__).parent.parent.parent
@@ -46,8 +47,8 @@ class IntegrationTestBase:
     5. 支持AB测试和模型对比
     """
     
-    # 测试用户ID前缀
-    TEST_USER_PREFIX = "test_user_integration_"
+    # 测试用户UUID命名空间（固定UUID，用于生成确定性的测试用户UUID）
+    TEST_USER_NAMESPACE = uuid.UUID('00000000-0000-0000-0000-000000000000')
     
     def __init__(self, test_suite_name: str = "base"):
         """
@@ -57,11 +58,14 @@ class IntegrationTestBase:
             test_suite_name: 测试套件名称
         """
         self.test_suite_name = test_suite_name
-        self.test_user_id = f"{self.TEST_USER_PREFIX}{test_suite_name}"
+        # 使用UUID v5生成确定性的测试用户UUID（基于suite名称）
+        self.test_user_uuid = uuid.uuid5(self.TEST_USER_NAMESPACE, f"test_integration_{test_suite_name}")
+        # 转换为字符串用于JSON序列化（传递给AI引擎和MCP工具）
+        self.test_user_id = str(self.test_user_uuid)
         self.test_scores: List[TestScore] = []
         self.setup_complete = False
         
-        # 初始化验证器
+        # 初始化验证器（传递字符串ID）
         self.data_validator = DataValidator(self.test_user_id)
         self.ai_evaluator = AIEvaluator(use_cache=True)
         
@@ -101,27 +105,23 @@ class IntegrationTestBase:
         """内部方法：清理测试数据"""
         try:
             async with get_session() as session:
-                # 获取所有测试用户ID
-                result = await session.execute(
-                    select(User.id).where(User.id.like(f"{self.TEST_USER_PREFIX}%"))
+                # 使用UUID对象进行数据库查询（SQLAlchemy支持UUID类型）
+                # 删除相关数据
+                await session.execute(
+                    delete(Memory).where(Memory.user_id == self.test_user_uuid)
                 )
-                test_user_ids = [row[0] for row in result.fetchall()]
+                await session.execute(
+                    delete(Reminder).where(Reminder.memory_id.in_(
+                        select(Memory.id).where(Memory.user_id == self.test_user_uuid)
+                    ))
+                )
+                await session.execute(
+                    delete(Interaction).where(Interaction.user_id == self.test_user_uuid)
+                )
                 
-                if test_user_ids:
-                    # 删除相关数据
-                    await session.execute(
-                        delete(Memory).where(Memory.user_id.in_(test_user_ids))
-                    )
-                    await session.execute(
-                        delete(Reminder).where(Reminder.user_id.in_(test_user_ids))
-                    )
-                    await session.execute(
-                        delete(Interaction).where(Interaction.user_id.in_(test_user_ids))
-                    )
-                    
-                    logger.info("test_data_cleanup_complete", 
-                              user_count=len(test_user_ids),
-                              suite=self.test_suite_name)
+                logger.info("test_data_cleanup_complete", 
+                          user_id=self.test_user_id,  # 已经是字符串
+                          suite=self.test_suite_name)
                     
         except Exception as e:
             logger.error("test_data_cleanup_failed", error=str(e))
@@ -170,9 +170,10 @@ class IntegrationTestBase:
                 **(context or {})
             }
             
+            # 传递字符串格式的user_id给AI引擎（用于JSON序列化）
             response = await ai_engine.process_message(
                 content=message,
-                user_id=self.test_user_id,
+                user_id=self.test_user_id,  # 已经是字符串
                 context=test_context
             )
             
@@ -197,43 +198,84 @@ class IntegrationTestBase:
                 data_result = data_validation_result.to_dict()
                 print(f"   分数: {data_result['score']:.1f}/40")
             
-            # 2.2 智能层评估 (40分) - 用AI评估
-            print("🧠 智能层评估中...")
-            test_case = {
-                "test_id": test_id,
-                "test_name": test_name,
-                "user_input": message,
-                "expected_behavior": expected_behavior
-            }
+            # ✅ 成本优化：数据层<90%时跳过AI评估（节省成本）
+            data_score_threshold = 36.0  # 90% * 40分
+            skip_ai_evaluation = data_result['score'] < data_score_threshold
             
-            # 获取数据库数据用于评估
-            db_data = await self._get_latest_memory_data()
-            
-            intelligence_evaluation = await self.ai_evaluator.evaluate_intelligence(
-                test_case=test_case,
-                ai_response=response,
-                db_data=db_data
-            )
-            intelligence_result = intelligence_evaluation.to_dict()
-            print(f"   分数: {intelligence_result['score']:.1f}/40")
-            
-            # 2.3 体验层评估 (20分) - 用AI评估
-            print("✨ 体验层评估中...")
-            experience_evaluation = await self.ai_evaluator.evaluate_experience(
-                test_case=test_case,
-                ai_response=response
-            )
-            experience_result = experience_evaluation.to_dict()
-            print(f"   分数: {experience_result['score']:.1f}/20")
+            if skip_ai_evaluation:
+                print(f"⚠️  数据层得分过低({data_result['score']:.1f}/40 < {data_score_threshold})")
+                print("   跳过智能层和体验层评估（节省成本）")
+                
+                # 直接给0分，不调用AI评估器
+                intelligence_result = {
+                    "score": 0,
+                    "dimensions": {
+                        "intent_understanding": 0,
+                        "information_extraction": 0,
+                        "context_usage": 0,
+                        "response_relevance": 0
+                    },
+                    "reasoning": "数据层未达标(<90%)，跳过AI评估",
+                    "suggestions": ["优先修复数据层问题"]
+                }
+                
+                experience_result = {
+                    "score": 0,
+                    "dimensions": {
+                        "persona_alignment": 0,
+                        "language_quality": 0,
+                        "information_completeness": 0,
+                        "user_friendliness": 0
+                    },
+                    "reasoning": "数据层未达标(<90%)，跳过AI评估",
+                    "suggestions": []
+                }
+                
+            else:
+                # 2.2 智能层评估 (40分) - 用AI评估
+                print("🧠 智能层评估中...")
+                test_case = {
+                    "test_id": test_id,
+                    "test_name": test_name,
+                    "user_input": message,
+                    "expected_behavior": expected_behavior
+                }
+                
+                # 获取数据库数据用于评估
+                db_data = await self._get_latest_memory_data()
+                
+                intelligence_evaluation = await self.ai_evaluator.evaluate_intelligence(
+                    test_case=test_case,
+                    ai_response=response,
+                    db_data=db_data
+                )
+                intelligence_result = intelligence_evaluation.to_dict()
+                print(f"   分数: {intelligence_result['score']:.1f}/40")
+                
+                # 2.3 体验层评估 (20分) - 用AI评估
+                print("✨ 体验层评估中...")
+                experience_evaluation = await self.ai_evaluator.evaluate_experience(
+                    test_case=test_case,
+                    ai_response=response
+                )
+                experience_result = experience_evaluation.to_dict()
+                print(f"   分数: {experience_result['score']:.1f}/20")
             
             # ===== 步骤3：计算总分 =====
+            # 构建对话记录
+            conversation = [
+                f"user({self.test_user_id})- {message}",
+                f"faa- {response}"
+            ]
+            
             test_score = ScoringSystem.calculate_test_score(
                 test_id=test_id,
                 test_name=test_name,
                 data_result=data_result,
                 intelligence_result=intelligence_result,
                 experience_result=experience_result,
-                duration=duration
+                duration=duration,
+                conversation=conversation
             )
             
             # 添加到结果列表
@@ -267,6 +309,8 @@ class IntegrationTestBase:
             
             # 创建失败的评分
             duration = (datetime.now() - start_time).total_seconds()
+            conversation = [f"user({self.test_user_id})- {message}"]
+            
             test_score = TestScore(
                 test_id=test_id,
                 test_name=test_name,
@@ -279,7 +323,8 @@ class IntegrationTestBase:
                 experience_details={},
                 duration=duration,
                 success=False,
-                issues=[f"执行异常: {str(e)}"]
+                issues=[f"执行异常: {str(e)}"],
+                conversation=conversation
             )
             
             self.test_scores.append(test_score)
@@ -289,8 +334,9 @@ class IntegrationTestBase:
         """获取最新的记忆数据用于评估"""
         try:
             async with get_session() as session:
+                # 使用UUID对象进行数据库查询
                 query = select(Memory).where(
-                    Memory.user_id == self.test_user_id
+                    Memory.user_id == self.test_user_uuid
                 ).order_by(Memory.created_at.desc()).limit(1)
                 
                 result = await session.execute(query)
@@ -310,6 +356,264 @@ class IntegrationTestBase:
         except Exception as e:
             logger.error("get_latest_memory_failed", error=str(e))
             return None
+    
+    async def run_multi_turn_test(
+        self,
+        test_id: str,
+        test_name: str,
+        turns: List[Dict[str, Any]],
+        context: Optional[Dict] = None,
+        fail_fast: bool = False
+    ) -> TestScore:
+        """
+        运行多轮对话测试
+        
+        Args:
+            test_id: 测试用例ID（如MT001）
+            test_name: 测试名称
+            turns: 多轮对话列表，每轮包含user_input、expected_behavior、data_verification
+            context: 额外的上下文信息
+            fail_fast: 如果某轮严重失败(<50%)，是否提前终止（默认False，继续测试）
+        
+        Returns:
+            TestScore对象，汇总所有轮次的评分
+        """
+        print()
+        print("=" * 80)
+        print(f"[{test_id}] {test_name} (多轮对话，共{len(turns)}轮)")
+        print("=" * 80)
+        
+        start_time = datetime.now()
+        turn_results = []
+        
+        # ✅ 每个多轮测试使用独立的thread_id，避免污染
+        test_context = {
+            "channel": "api",
+            "thread_id": f"multi_turn_{test_id}_{datetime.now().strftime('%H%M%S')}",
+            **(context or {})
+        }
+        
+        # 记录所有轮次的对话
+        all_conversations = []
+        failed_early = False
+        
+        try:
+            # 逐轮执行
+            for i, turn_data in enumerate(turns, 1):
+                turn_num = turn_data.get("turn", i)
+                user_input = turn_data["user_input"]
+                expected_behavior = turn_data["expected_behavior"]
+                data_verification = turn_data.get("data_verification")
+                
+                print(f"\n{'─'*80}")
+                print(f"🔄 第{turn_num}轮")
+                print(f"{'─'*80}")
+                print(f"📝 用户：{user_input}")
+                
+                # 调用AI引擎
+                response = await ai_engine.process_message(
+                    content=user_input,
+                    user_id=self.test_user_id,
+                    context=test_context
+                )
+                
+                print(f"🤖 FAA：{response}")
+                
+                # 记录对话
+                all_conversations.append({
+                    "turn": turn_num,
+                    "user": user_input,
+                    "ai": response
+                })
+                
+                # 数据层验证
+                data_result = {"score": 40, "details": {}, "issues": []}
+                if data_verification:
+                    data_validation_result = await self.data_validator.verify(
+                        expected=data_verification,
+                        test_context=test_context
+                    )
+                    data_result = data_validation_result.to_dict()
+                    
+                    # ✅ 打印每轮的数据验证结果
+                    print(f"📊 数据验证：{data_result['score']:.1f}/40", end="")
+                    if data_result['score'] >= 36:
+                        print(" ✅")
+                    elif data_result['score'] >= 30:
+                        print(" ⚠️")
+                    else:
+                        print(" ❌")
+                    
+                    # ✅ fail_fast：如果某轮严重失败，提前终止
+                    if fail_fast and data_result['score'] < 20:  # <50%
+                        print(f"⚠️  第{turn_num}轮严重失败，提前终止测试")
+                        failed_early = True
+                        turn_results.append({
+                            "turn": turn_num,
+                            "data_score": data_result["score"],
+                            "user_input": user_input,
+                            "ai_response": response,
+                            "early_termination": True
+                        })
+                        break
+                
+                turn_results.append({
+                    "turn": turn_num,
+                    "data_score": data_result["score"],
+                    "user_input": user_input,
+                    "ai_response": response
+                })
+            
+            # 计算总耗时
+            duration = (datetime.now() - start_time).total_seconds()
+            
+            # ===== 汇总评分 =====
+            # 数据层：取所有轮的平均分
+            avg_data_score = sum(r["data_score"] for r in turn_results) / len(turn_results)
+            
+            # 如果提前终止，在issues中记录
+            if failed_early:
+                print(f"\n⚠️  测试提前终止于第{len(turn_results)}轮")
+                avg_data_score = avg_data_score * 0.7  # 提前终止扣30%分数
+            
+            # 只对最后一轮做完整的三层评估（节省成本）
+            last_turn = turn_results[-1]
+            last_turn_data = turns[-1]
+            
+            print(f"\n{'='*80}")
+            print(f"💎 对最后一轮进行完整评估...")
+            
+            # 构建最后一轮的测试用例
+            final_test_case = {
+                "test_id": test_id,
+                "test_name": test_name,
+                "user_input": last_turn["user_input"],
+                "expected_behavior": last_turn_data["expected_behavior"],
+                "multi_turn_context": all_conversations[:-1]  # 前面的对话作为上下文
+            }
+            
+            # 数据层已有分数
+            final_data_result = {"score": avg_data_score, "details": {}, "issues": []}
+            
+            # 决定是否跳过AI评估
+            data_score_threshold = 36.0  # 90% * 40分
+            skip_ai_evaluation = avg_data_score < data_score_threshold
+            
+            if skip_ai_evaluation:
+                print(f"⚠️  数据层平均得分过低({avg_data_score:.1f}/40 < {data_score_threshold})")
+                print("   跳过智能层和体验层评估（节省成本）")
+                
+                intelligence_result = {
+                    "score": 0,
+                    "dimensions": {"intent_understanding": 0, "information_extraction": 0, "context_usage": 0, "response_relevance": 0},
+                    "reasoning": "数据层未达标(<90%)，跳过AI评估",
+                    "suggestions": ["优先修复数据层问题"]
+                }
+                
+                experience_result = {
+                    "score": 0,
+                    "dimensions": {"persona_alignment": 0, "language_quality": 0, "information_completeness": 0, "user_friendliness": 0},
+                    "reasoning": "数据层未达标(<90%)，跳过AI评估",
+                    "suggestions": []
+                }
+            else:
+                # 智能层和体验层评估（使用最后一轮的AI回复）
+                db_data = await self._get_latest_memory_data()
+                
+                print("🧠 智能层评估中...")
+                intelligence_evaluation = await self.ai_evaluator.evaluate_intelligence(
+                    test_case=final_test_case,
+                    ai_response=last_turn["ai_response"],
+                    db_data=db_data
+                )
+                intelligence_result = intelligence_evaluation.to_dict()
+                print(f"   分数: {intelligence_result['score']:.1f}/40")
+                
+                print("✨ 体验层评估中...")
+                experience_evaluation = await self.ai_evaluator.evaluate_experience(
+                    test_case=final_test_case,
+                    ai_response=last_turn["ai_response"]
+                )
+                experience_result = experience_evaluation.to_dict()
+                print(f"   分数: {experience_result['score']:.1f}/20")
+            
+            # 生成完整对话记录（用于报告）
+            conversation = []
+            for c in all_conversations:
+                conversation.append(f"user({self.test_user_id})- {c['user']}")
+                conversation.append(f"faa- {c['ai']}")
+            
+            # 计算总分
+            test_score = ScoringSystem.calculate_test_score(
+                test_id=test_id,
+                test_name=test_name,
+                data_result=final_data_result,
+                intelligence_result=intelligence_result,
+                experience_result=experience_result,
+                duration=duration,
+                conversation=conversation
+            )
+            
+            # 添加到结果列表
+            self.test_scores.append(test_score)
+            
+            # 打印结果
+            print()
+            print(f"{'='*80}")
+            if test_score.success:
+                print(f"✅ 多轮测试通过 - 总分: {test_score.total_score:.1f}/100 (等级{test_score.get_grade()})")
+            else:
+                print(f"❌ 多轮测试失败 - 总分: {test_score.total_score:.1f}/100 (等级{test_score.get_grade()})")
+            
+            print(f"   数据层: {test_score.data_score:.1f}/40 (平均)")
+            print(f"   智能层: {test_score.intelligence_score:.1f}/40")
+            print(f"   体验层: {test_score.experience_score:.1f}/20")
+            print(f"   完成轮数: {len(turn_results)}/{len(turns)}")
+            print(f"   总耗时: {duration:.1f}秒")
+            if failed_early:
+                print(f"   ⚠️  提前终止")
+            
+            if test_score.issues:
+                print()
+                print("⚠️  改进建议:")
+                for i, issue in enumerate(test_score.issues[:5], 1):
+                    print(f"   {i}. {issue}")
+            
+            print(f"{'='*80}")
+            
+            return test_score
+            
+        except Exception as e:
+            logger.error("multi_turn_test_failed", test_id=test_id, error=str(e))
+            print(f"❌ 多轮测试异常：{e}")
+            
+            duration = (datetime.now() - start_time).total_seconds()
+            
+            # 生成对话记录
+            conversation = []
+            if all_conversations:
+                for c in all_conversations:
+                    conversation.append(f"user({self.test_user_id})- {c['user']}")
+                    conversation.append(f"faa- {c['ai']}")
+            
+            test_score = TestScore(
+                test_id=test_id,
+                test_name=test_name,
+                data_score=0,
+                intelligence_score=0,
+                experience_score=0,
+                total_score=0,
+                data_details={},
+                intelligence_details={},
+                experience_details={},
+                duration=duration,
+                success=False,
+                issues=[f"多轮测试异常: {str(e)}"],
+                conversation=conversation
+            )
+            
+            self.test_scores.append(test_score)
+            return test_score
     
     def print_summary(self) -> Dict:
         """
@@ -381,8 +685,9 @@ class IntegrationTestBase:
         """
         try:
             async with get_session() as session:
+                # 使用UUID对象进行数据库查询
                 query = select(Memory).where(
-                    Memory.user_id == self.test_user_id
+                    Memory.user_id == self.test_user_uuid
                 ).order_by(Memory.created_at.desc())
                 
                 if memory_type:
