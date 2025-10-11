@@ -41,11 +41,11 @@ class VersionTracker:
                 "embedding_model": VersionTracker._get_embedding_model(),
             },
             
-            # 测试评估器LLM配置（独立配置，默认gpt-4o-mini）
+            # 测试评估器LLM配置（从配置中读取）
             "evaluator_llm": {
-                "provider": "openai",
-                "model": "gpt-4o-mini",  # 成本低、速度快、评估能力足够
-                "base_url": "https://api.openai.com/v1",
+                "provider": settings.EVALUATOR_LLM_PROVIDER,
+                "model": settings.EVALUATOR_LLM_MODEL,
+                "base_url": settings.EVALUATOR_LLM_BASE_URL,
                 "purpose": "AI评估AI的理解和体验"
             },
             

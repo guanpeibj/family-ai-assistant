@@ -851,7 +851,7 @@ multi_turn_tests:
         expected_behavior:
           intent: "查询健康记录，但对象不明确"
           key_actions: ["识别需要澄清", "询问是哪个孩子"]
-          response_should: "询问是大女儿、二女儿还是儿子"
+          response_should: "询问是女儿还是儿子"
         data_verification:
           should_store: false
       

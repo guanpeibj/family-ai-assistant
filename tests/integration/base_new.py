@@ -198,9 +198,9 @@ class IntegrationTestBase:
                 data_result = data_validation_result.to_dict()
                 print(f"   分数: {data_result['score']:.1f}/40")
             
-            # ✅ 成本优化：数据层<90%时跳过AI评估（节省成本）
+            # ✅ 成本优化：数据层<=90%时跳过AI评估（节省成本）
             data_score_threshold = 36.0  # 90% * 40分
-            skip_ai_evaluation = data_result['score'] < data_score_threshold
+            skip_ai_evaluation = data_result['score'] <= data_score_threshold
             
             if skip_ai_evaluation:
                 print(f"⚠️  数据层得分过低({data_result['score']:.1f}/40 < {data_score_threshold})")
@@ -264,7 +264,7 @@ class IntegrationTestBase:
             # ===== 步骤3：计算总分 =====
             # 构建对话记录
             conversation = [
-                f"user({self.test_user_id})- {message}",
+                f"user- {message}",
                 f"faa- {response}"
             ]
             
@@ -363,7 +363,7 @@ class IntegrationTestBase:
         test_name: str,
         turns: List[Dict[str, Any]],
         context: Optional[Dict] = None,
-        fail_fast: bool = False
+        fail_fast: bool = True
     ) -> TestScore:
         """
         运行多轮对话测试
@@ -445,8 +445,8 @@ class IntegrationTestBase:
                         print(" ❌")
                     
                     # ✅ fail_fast：如果某轮严重失败，提前终止
-                    if fail_fast and data_result['score'] < 20:  # <50%
-                        print(f"⚠️  第{turn_num}轮严重失败，提前终止测试")
+                    if fail_fast and data_result['score'] < 36:  # <90%
+                        print(f"⚠️  第{turn_num}轮失败，提前终止测试")
                         failed_early = True
                         turn_results.append({
                             "turn": turn_num,
@@ -540,7 +540,7 @@ class IntegrationTestBase:
             # 生成完整对话记录（用于报告）
             conversation = []
             for c in all_conversations:
-                conversation.append(f"user({self.test_user_id})- {c['user']}")
+                conversation.append(f"user- {c['user']}")
                 conversation.append(f"faa- {c['ai']}")
             
             # 计算总分

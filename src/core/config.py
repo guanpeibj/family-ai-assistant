@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = Field(default="", description="Anthropic API Key，可选")
     ANTHROPIC_MODEL: str = Field(default="claude-3-7-sonnet-latest", description="Anthropic 模型名")
     
+    # 测试评估器LLM配置（用于集成测试中的AI评估AI）
+    EVALUATOR_LLM_PROVIDER: str = Field(default="openai_compatible", description="评估器LLM提供商")
+    EVALUATOR_LLM_MODEL: str = Field(default="gpt-4o-mini", description="评估器使用的模型，默认gpt-4o-mini（成本低、速度快）")
+    EVALUATOR_LLM_BASE_URL: str = Field(default="https://api.openai.com/v1", description="评估器LLM的API地址")
+    EVALUATOR_LLM_API_KEY: str = Field(default="", description="评估器LLM的API Key，为空则使用OPENAI_API_KEY")
+    
     # 媒体与多模态
     MEDIA_ROOT: str = Field(default="/data/media", description="媒体文件存储根目录")
     MEDIA_PUBLIC_BASE_URL: str = Field(default="", description="对外可访问的媒体基础URL，如 https://example.com/media")

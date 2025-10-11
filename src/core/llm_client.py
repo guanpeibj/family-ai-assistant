@@ -19,14 +19,30 @@ from ..core.config import settings
 class LLMClient:
     """统一封装不同厂商的 Chat 能力。"""
 
-    def __init__(self) -> None:
-        self.provider: str = settings.AI_PROVIDER
+    def __init__(
+        self,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None
+    ) -> None:
+        """
+        初始化LLM客户端
+        
+        Args:
+            provider: LLM提供商，如openai_compatible/anthropic，None则使用settings.AI_PROVIDER
+            model: 模型名称，None则使用settings.OPENAI_MODEL
+            base_url: API地址，None则使用settings.OPENAI_BASE_URL
+            api_key: API Key，None则使用settings.OPENAI_API_KEY
+        """
+        # 支持参数覆盖配置，如果不传参则使用settings默认值
+        self.provider: str = provider or settings.AI_PROVIDER
 
         # OpenAI 兼容初始化（默认）
         self._openai_client = None
-        self._openai_model = settings.OPENAI_MODEL
-        self._openai_base_url = settings.OPENAI_BASE_URL or None
-        self._openai_api_key = settings.OPENAI_API_KEY
+        self._openai_model = model or settings.OPENAI_MODEL
+        self._openai_base_url = base_url or settings.OPENAI_BASE_URL or None
+        self._openai_api_key = api_key or settings.OPENAI_API_KEY
         self._openai_embedding_model = getattr(settings, "OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
         # 本地 fastembed 初始化（延迟）
         self._embed_provider: str = getattr(settings, "EMBED_PROVIDER", "local_fastembed")

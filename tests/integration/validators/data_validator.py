@@ -106,7 +106,7 @@ class DataValidator:
                 if detail.get("issues"):
                     result.issues.extend(detail["issues"])
             
-            result.success = result.score >= 30  # 75%及格
+            result.success = result.score >= 36
             
         except Exception as e:
             logger.error("data_verification_failed", error=str(e))
@@ -341,10 +341,10 @@ class DataValidator:
                 # 数据关联 (3分)
                 if "thread_id" in ai_data:
                     score_data["score"] += 3
-                    score_data["details"]["relations"] = "✅ 有线程ID"
+                    score_data["details"]["relations"] = "✅ 有thread_id"
                 else:
                     score_data["score"] += 2
-                    score_data["details"]["relations"] = "⚠️ 无线程ID"
+                    score_data["details"]["relations"] = "⚠️ 无thread_id"
                 
                 # AI扩展 (2分)
                 extra_fields = [k for k in ai_data.keys() if k not in required_fields]

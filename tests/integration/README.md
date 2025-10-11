@@ -16,6 +16,24 @@
 
 ## 🚀 快速开始
 
+### 配置评估器LLM（可选）
+
+测试系统使用独立的评估器LLM（用AI评估AI），默认配置已经优化：
+
+```bash
+# .env 文件中的配置（通常不需要修改）
+EVALUATOR_LLM_PROVIDER=openai_compatible
+EVALUATOR_LLM_MODEL=gpt-4o-mini
+EVALUATOR_LLM_BASE_URL=https://api.openai.com/v1
+# EVALUATOR_LLM_API_KEY=  # 留空则使用OPENAI_API_KEY
+```
+
+**为什么独立配置？**
+- 主项目可以使用任意LLM（kimi、claude等）
+- 评估器使用成本最优的模型（gpt-4o-mini）
+- 不影响主项目的模型选择
+- LLMClient支持参数化初始化，简洁优雅
+
 ### 30秒运行测试
 
 ```bash
@@ -47,7 +65,7 @@ python run_golden_set.py --limit 10
 
 - **数据层<90%时跳过AI评估**：节省约30%成本
 - **多轮测试只评估最后一轮**：避免重复评估
-- **评估器使用gpt-4o-mini**：成本低、速度快
+- **评估器独立配置LLM**：默认使用gpt-4o-mini（成本低、速度快），可在.env中配置
 
 ### 3. 支持单轮和多轮对话
 

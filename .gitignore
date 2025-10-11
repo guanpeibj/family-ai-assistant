@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.DS_Store
 
 # 隐私数据文件 - 绝对不要提交到GitHub
 family_private_data.json
