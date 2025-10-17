@@ -161,8 +161,12 @@ class DataValidator:
         
         try:
             async with get_session() as session:
+                # 查询最新的非chat_turn记录（排除对话记录）
                 query = select(Memory).where(
-                    Memory.user_id == self.user_id
+                    Memory.user_id == self.user_id,
+                    func.coalesce(
+                        Memory.ai_understanding['type'].astext, ''
+                    ) != 'chat_turn'
                 ).order_by(Memory.created_at.desc()).limit(1)
                 
                 result = await session.execute(query)

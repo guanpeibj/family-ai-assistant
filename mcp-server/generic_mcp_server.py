@@ -403,6 +403,11 @@ class GenericMCPServer:
             "CREATE INDEX IF NOT EXISTS idx_memories_aiu_thread_id ON memories ((ai_understanding->>'thread_id'))",
             "CREATE INDEX IF NOT EXISTS idx_memories_aiu_type ON memories ((ai_understanding->>'type'))",
             "CREATE INDEX IF NOT EXISTS idx_memories_aiu_channel ON memories ((ai_understanding->>'channel'))",
+            # 费用类目索引（支持层级分类）
+            "CREATE INDEX IF NOT EXISTS idx_memories_aiu_category ON memories ((ai_understanding->>'category'))",
+            "CREATE INDEX IF NOT EXISTS idx_memories_aiu_sub_category ON memories ((ai_understanding->>'sub_category'))",
+            # 组合索引：category + sub_category（加速细粒度统计）
+            "CREATE INDEX IF NOT EXISTS idx_memories_cat_subcat ON memories ((ai_understanding->>'category'), (ai_understanding->>'sub_category'))",
             # 组合索引：thread + time，加速共享线程回放
             "CREATE INDEX IF NOT EXISTS idx_memories_thread_time ON memories ((ai_understanding->>'thread_id'), occurred_at DESC)",
             # 组合索引：用户 + 时间
@@ -463,24 +468,35 @@ class GenericMCPServer:
                 if operation != 'count' and not field:
                     return {"error": "field is required for non-count aggregation"}
                 
-                # 分组支持
+                # 分组支持（增强：支持多字段分组）
                 period = None
-                ai_group_field = None
+                ai_group_fields = []
                 if filters:
                     gb = filters.get('group_by')
                     if gb in ['day', 'week', 'month']:
                         period = gb
                     agf = filters.get('group_by_ai_field')
                     if isinstance(agf, str) and agf:
-                        ai_group_field = agf
+                        # 支持逗号分隔的多字段分组（如 "category,sub_category"）
+                        ai_group_fields = [f.strip() for f in agf.split(',') if f.strip()]
+                    elif isinstance(agf, list):
+                        # 支持数组形式
+                        ai_group_fields = [str(f).strip() for f in agf if f]
+                
                 group_exprs = []
                 group_labels = []
                 if period:
                     group_exprs.append(f"date_trunc('{period}', occurred_at)")
                     group_labels.append("period")
-                if ai_group_field:
-                    group_exprs.append(f"(ai_understanding->>'{ai_group_field}')")
-                    group_labels.append("ai_group")
+                
+                # 支持多个AI字段分组
+                for idx, field_name in enumerate(ai_group_fields):
+                    group_exprs.append(f"(ai_understanding->>'{field_name}')")
+                    # 为每个字段生成唯一标签
+                    if len(ai_group_fields) == 1:
+                        group_labels.append("ai_group")
+                    else:
+                        group_labels.append(f"ai_group_{field_name}")
                 if group_exprs:
                     select_cols = []
                     for expr, label in zip(group_exprs, group_labels):
@@ -496,12 +512,20 @@ class GenericMCPServer:
                     else:
                         sql = f"SELECT {operation.upper()}({field}) as result FROM memories WHERE {user_condition}"
                 
-                # 添加过滤条件（优化版：优先使用计算列）
+                # 添加过滤条件（优化版：优先使用索引）
                 if filters:
                     # type过滤（优化：优先使用计算列索引）
                     if 'type' in filters:
                         sql += f" AND type_extracted = ${len(params) + 1}"
                         params.append(filters['type'])
+                    # category过滤（新增：支持类目过滤）
+                    if 'category' in filters:
+                        sql += f" AND (ai_understanding->>'category') = ${len(params) + 1}"
+                        params.append(filters['category'])
+                    # sub_category过滤（新增：支持子类目过滤）
+                    if 'sub_category' in filters:
+                        sql += f" AND (ai_understanding->>'sub_category') = ${len(params) + 1}"
+                        params.append(filters['sub_category'])
                     # channel过滤
                     if 'channel' in filters:
                         sql += f" AND (ai_understanding->>'channel') = ${len(params) + 1}"
@@ -517,11 +541,13 @@ class GenericMCPServer:
                     je = filters.get('jsonb_equals') if isinstance(filters.get('jsonb_equals'), dict) else None
                     if je:
                         for k, v in je.items():
-                            # 对高频字段使用计算列优化
+                            # 对高频字段使用索引优化
                             if k == 'type':
                                 sql += f" AND type_extracted = ${len(params) + 1}"
                             elif k == 'category':
-                                sql += f" AND category_extracted = ${len(params) + 1}"
+                                sql += f" AND (ai_understanding->>'category') = ${len(params) + 1}"
+                            elif k == 'sub_category':
+                                sql += f" AND (ai_understanding->>'sub_category') = ${len(params) + 1}"
                             elif k == 'thread_id':
                                 sql += f" AND thread_id_extracted = ${len(params) + 1}"
                             else:
@@ -556,7 +582,7 @@ class GenericMCPServer:
                         "filters": filters,
                         "_meta": {
                             "group_by": period,
-                            "group_by_ai_field": ai_group_field,
+                            "group_by_ai_fields": ai_group_fields,  # 支持多字段
                             "applied_filters": list((filters or {}).keys())
                         }
                     }

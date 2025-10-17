@@ -382,36 +382,513 @@
       "park": "清风公园（800 米）"
     }
   },
-  "budget": {
+  "expense_categories_budget": {
     "currency": "CNY",
-    "monthly_total": 11500,
-    "monthly_categories": {
-      "餐饮": 3500,
-      "交通": 700,
-      "医疗": 1200,
-      "教育": 2500,
-      "娱乐": 600,
-      "居住": 900,
-      "服饰": 500,
-      "日用": 500,
-      "其他": 1100
-    },
-    "annual_goals": {
-      "education_fund": 60000,
-      "emergency_fund": 120000,
-      "travel": 25000
-    },
-    "tracking_rules": {
-      "alert_threshold": 0.8,
-      "review_frequency": "weekly",
-      "categories_to_track": ["food", "education", "healthcare"],
-      "household_dashboard": {
-        "owner": "dad",
-        "share_with": ["mom"],
-        "preferred_format": "Excel + 图表",
-        "remind_day": "Sunday"
+    "monthly_budget_total": 11500,
+    "monthly_categories_budget": [
+      {
+        "category_name": "孝敬父母",
+        "alias": ["孝敬父母", "孝敬", "父母"],
+        "budget": -1,
+        "description": "孝敬父母专门指，我们家庭支持我们的父母的费用、包括父母的生活费、礼物费、请客费、红包费等。",
+        "exclude": [],
+        "notes": ""
+      },
+      {
+        "category_name": "周济",
+        "alias": ["周济帮助", "请客", "礼物"],
+        "budget": -1,
+        "description": "周济帮助包括但不限于周济帮助、请客、送礼、红包、红包、红包费用等, 但不包括孝敬父母。",
+        "exclude": ["孝敬父母"],
+        "notes": ""
+      },
+      {
+        "category_name": "食材",
+        "alias": ["食品"],
+        "budget": 3000,
+        "description": "食材包括但不限于蔬菜、水果、肉类、海鲜、蛋类、奶类、豆类、面食、调料等。",
+        "notes": "",
+        "sub_categories": [
+          {
+            "sub_category_name": "蔬菜",
+            "alias": ["菜"],
+            "budget": -1,
+            "description": "蔬菜包括但不限于叶菜、根菜、瓜菜、豆菜、菌菜、花菜等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "主食类",
+            "alias": ["主食"],
+            "budget": -1,
+            "description": "主食包括但不限于米饭、面条、馒头、包子、饺子、馄饨、粥等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "水果",
+            "alias": ["水果"],
+            "budget": -1,
+            "description": "水果包括但不限于苹果、香蕉、梨、葡萄、橙子、西瓜、草莓、蓝莓、樱桃、桃子等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "肉类",
+            "alias": ["肉"],
+            "budget": -1,
+            "description": "肉类指畜类、禽类、水产等动物的肉，包括但不限于猪肉、牛肉、羊肉、鸡肉、鸭肉、鸽子肉、鱼、虾、海鲜等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "蛋类",
+            "alias": ["蛋"],
+            "budget": -1,
+            "description": "蛋类包括但不限于鸡蛋、鸭蛋、鹅蛋、鹌鹑蛋、鸽子蛋等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "奶类",
+            "alias": ["奶"],
+            "budget": -1,
+            "description": "奶类包括但不限于牛奶、羊奶、马奶、骆驼奶等，也包括奶粉、酸奶等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "干货",
+            "alias": ["干货"],
+            "budget": -1,
+            "description": "干货包括但不限于木耳、香菇、干贝、干虾、干鱼、干菜等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "调料",
+            "alias": ["调料"],
+            "budget": -1,
+            "description": "调料包括但不限于食用油、盐、糖、酱油、醋、料酒、味精、鸡精、花椒、八角、桂皮、香叶等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "其他",
+            "alias": ["其他"],
+            "budget": -1,
+            "description": "其他属于食材的，但不在任何食材的sub_category中的数据。",
+            "notes": ""
+          }
+        ]
+
+
+
+      },
+      {
+        "category_name": "住房",
+        "alias": ["住房"],
+        "budget": 5500,
+        "description": "住房包括但不限于房租、买房、住房贷款、物业费、水电燃气、卫生费、维修费、装修费等。",
+        "notes": "",
+        "sub_categories": [
+          {
+            "sub_category_name": "房租",
+            "alias": ["房租"],
+            "budget": -1,
+            "description": "",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "住房贷款",
+            "alias": ["住房贷款"],
+            "budget": -1,
+            "description": "",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "物业费",
+            "alias": ["物业费"],
+            "budget": -1,
+            "description": "",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "卫生费",
+            "alias": ["卫生费"],
+            "budget": -1,
+            "description": "",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "水费",
+            "alias": ["水费"],
+            "budget": -1,
+            "description": "",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "电费",
+            "alias": ["电费"],
+            "budget": -1,
+            "description": "",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "燃气费",
+            "alias": ["燃气", "天然气", "煤气"],
+            "budget": -1,
+            "description": "燃气费包括但不限于天然气、煤气等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "其他",
+            "alias": ["其他"],
+            "budget": -1,
+            "description": "其他属于住房的，但不在任何住房的sub_category中的数据。",
+            "notes": ""
+          }
+        ]
+      },
+      {
+        "category_name": "交通",
+        "alias": ["出行","通勤"],
+        "budget": 700,
+        "description": "交通包括但不限于公交、地铁、打车、买车、汽车贷款、汽车保险、加油费、停车费、过路费、高速费、火车票、机票、船票、出租车费、汽车保养维修等。",
+        "notes": "",
+        "sub_categories": [
+          {
+            "sub_category_name": "买车",
+            "alias": ["买车"],
+            "budget": -1,
+            "description": "买车包括但不限于买车、买车卡、买车充值、买车优惠、买车补贴等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "汽车贷款",
+            "alias": ["车贷"],
+            "budget": -1,
+            "description": "汽车贷款包括但不限于汽车贷款、汽车贷款卡、汽车贷款充值、汽车贷款优惠、汽车贷款补贴等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "公交地铁",
+            "alias": ["公交","地铁"],
+            "budget": -1,
+            "description": "公交地铁包括但不限于公交卡、公交票、公交充值、地铁卡、地铁票、地铁充值等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "打车",
+            "alias": ["打车"],
+            "budget": -1,
+            "description": "打车包括但不限于打车、出租车、网约车、顺风车、专车、代驾等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "加油",
+            "alias": ["加油费", "汽油费", "油费"],
+            "budget": -1,
+            "description": "加油费包括但不限于加油、加油卡、加油充值等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "停车",
+            "alias": ["停车费"],
+            "budget": -1,
+            "description": "停车费包括但不限于停车、停车卡、停车充值等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "高速",
+            "alias": ["高速费", "过路费"],
+            "budget": -1,
+            "description": "高速费包括但不限于高速费、高速费卡、高速费充值、过路费、过路费卡、过路费充值等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "汽车保险",
+            "alias": ["汽车保险"],
+            "budget": -1,
+            "description": "汽车保险包括但不限于汽车保险、汽车保险卡、汽车保险充值等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "汽车保养维修",
+            "alias": ["汽车保养", "汽车维修"],
+            "budget": -1,
+            "description": "汽车保养维修包括但不限于汽车保养、汽车维修、汽车保养卡、汽车维修卡、汽车保养充值、汽车维修充值等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "充电",
+            "alias": ["充电费", "电费"],
+            "budget": -1,
+            "description": "充电费包括但不限于汽车充电、充电卡、充电充值等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "其他",
+            "alias": ["其他"],
+            "budget": -1,
+            "description": "其他属于交通的，但不在任何交通的sub_category中的数据。",
+            "notes": ""
+          }
+        ]
+      },
+      {
+        "category_name": "医疗保健",
+        "alias": ["医疗","看病","医院","诊所","保健", "调养","养生"],
+        "budget": 1200,
+        "description": "医疗保健包括但不限于就医、药品、体检、疫苗、医疗器械等、在线问诊、保健品、保健服务等。",
+        "notes": "",
+        "sub_categories": [
+          {
+            "sub_category_name": "就医",
+            "alias": ["就医"],
+            "budget": -1,
+            "description": "就医包括但不限于就医、挂号、看病、诊所、医院、医生、护士、药房、化验、检查、治疗、手术、住院、出院等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "药品",
+            "alias": ["药品", "药","买药","配药"],
+            "budget": -1,
+            "description": "药品包括但不限于药品、药品卡、线上买药等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "体检",
+            "alias": ["体检"],
+            "budget": -1,
+            "description": "体检包括但不限于体检、体检卡、体检充值等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "疫苗",
+            "alias": ["疫苗"],
+            "budget": -1,
+            "description": "疫苗包括但不限于疫苗、疫苗卡、疫苗充值等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "在线问诊",
+            "alias": ["在线问诊"],
+            "budget": -1,
+            "description": "在线问诊包括但不限于在线问诊、在线问诊卡、在线问诊充值等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "医疗器械",
+            "alias": ["医疗器械"],
+            "budget": -1,
+            "description": "医疗器械包括但不限于医疗器械、医疗器械卡、医疗器械充值等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "保健品",
+            "alias": ["保健品"],
+            "budget": -1,
+            "description": "保健品包括但不限于保健品、保健品卡、保健品充值等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "保健服务",
+            "alias": ["保健服务"],
+            "budget": -1,
+            "description": "保健服务包括但不限于保健服务、保健服务卡、保健服务充值等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "其他",
+            "alias": ["其他"],
+            "budget": -1,
+            "description": "其他属于医疗保健的，但不在任何医疗保健的sub_category中的数据。",
+            "notes": ""
+          }
+        ]
+      },
+      {
+        "category_name": "HomeSchooling",
+        "alias": ["HomeSchooling", " homeschooling", " homeschool", "家庭教育", "在家教育"],
+        "budget": 1000,
+        "description": "HomeSchooling包括家庭教育的所有花费，包括但不限于教材、参考书、教育服务、教育产品、教育工具等。",
+        "notes": ""
+      },
+      {
+        "category_name": "书",
+        "alias": ["书籍", "买书"],
+        "budget": 1000,
+        "description": "书籍包括但不限于书籍、杂志、报纸、漫画、小说、教材、参考书、字典、词典等。",
+        "notes": "",
+        "sub_categories": [
+          {
+            "sub_category_name": "大人用书",
+            "alias": ["大人用书"],
+            "budget": -1,
+            "description": "大人用书指大人购买的书籍等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "孩童用书",
+            "alias": ["孩童用书"],
+            "budget": -1,
+            "description": "小孩用书不包括homeschooling上学的书籍材料，包括但不限于绘本、故事书、科普书、教材、参考书、字典、词典等孩子课外使用的书籍等。",
+            "notes": ""
+          }
+        ]
+      },
+      {
+        "category_name": "少儿培训",
+        "alias": ["少儿培训", "培训班", "补习"],
+        "budget": 1000,
+        "description": "少儿培训包括但不限于钢琴课、轮滑课、游泳课、篮球课、足球课、英文、语文课等等孩子培训的课。",
+        "notes": ""
+      },
+      {
+        "category_name": "大人学习",
+        "alias": ["大人学习", "培训班", "职业培训"],
+        "budget": -1,
+        "description": "大人学习包括但不限于网课、在线学习、兴趣培养、机能培训、职业培训、证书费用、考试费用等大人自己提升自己的课程。",
+        "notes": ""
+      },
+      {
+        "category_name": "软件订阅",
+        "alias": ["软件订阅", "软件", "订阅"],
+        "budget": -1,
+        "description": "软件订阅包括但不限于软件订阅、软件、在线应用、订阅、软件费用、软件充值等。",
+        "notes": ""
+      },
+      
+      {
+        "category_name": "保险",
+        "alias": ["保险"],
+        "budget": 1000,
+        "description": "保险包括但不限于意外险、医疗险、重疾险、养老险、教育险、投资险等。",
+        "notes": ""
+      },
+      {
+        "category_name": "外出就餐",
+        "alias": ["外出就餐", "下馆子", "外卖"],
+        "budget": 1000,
+        "description": "外出就餐包括但不限于外出就餐、外卖、餐厅、小吃、快餐、自助餐、茶餐厅、咖啡厅、夜市等。",
+        "notes": "",
+        "sub_categories": [
+          {
+            "sub_category_name": "外卖",
+            "alias": ["外卖"],
+            "budget": -1,
+            "description": "外卖包括但不限于外卖、外卖卡、外卖充值等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "堂食",
+            "alias": ["下馆子"],
+            "budget": -1,
+            "description": "餐厅包括但不限于餐厅、路边小吃、夜市等。",
+            "notes": ""
+          },
+          {
+            "sub_category_name": "其他",
+            "alias": ["其他"],
+            "budget": -1,
+            "description": "其他属于外出就餐的，但不在任何外出就餐的sub_category中的数据。",
+            "notes": ""
+          }
+        ]
+      },
+      {
+        "category_name": "零食",
+        "alias": ["零食"],
+        "budget": 1000,
+        "description": "零食包括但不限于饼干、薯片、糖果、饮料、冰淇淋、蛋糕、巧克力、坚果、水果干等零食。",
+        "notes": ""
+      },
+      {
+        "category_name": "家具",
+        "alias": ["家具", "买家具"],
+        "budget": 1000,
+        "description": "家具包括但不限于所有家具用品等。",
+        "notes": ""
+      },
+      {
+        "category_name": "家电",
+        "alias": ["电器"],
+        "budget": 1000,
+        "description": "家电包括但不限于电视、冰箱、洗衣机、空调、热水器、厨房电器等家用电器的购买、维修、保养、配件购买等。",
+        "notes": ""
+      },
+      {
+        "category_name": "3C用品",
+        "alias": ["3C", "买3C用品"],
+        "budget": 1000,
+        "description": "3C用品包括但不限于手机、电脑、平板、耳机、音箱、智能手表、智能手环等3C产品的购买、维修、保养、配件购买等。",
+        "notes": ""
+      },
+      {
+        "category_name": "衣服",
+        "alias": ["衣服", "买衣服"],
+        "budget": 1000,
+        "description": "衣服包括但不限于衣服、裤子、鞋子、包包、配饰等的购买、保养、干洗、裁缝、配件购买等。",
+        "notes": ""
+      },
+      {
+        "category_name": "咖啡茶饮",
+        "alias": ["咖啡", "茶", "饮"],
+        "budget": 1000,
+        "description": "咖啡茶饮包括但不限于咖啡、茶、饮品、茶具等。",
+        "notes": ""
+      },
+      {
+        "category_name": "宠物",
+        "alias": ["宠物"],
+        "budget": 1000,
+        "description": "宠物包括但不限于狗猫兔鱼等宠物的食品、用品、医疗、寄养等。",
+        "notes": ""
+      },
+      {
+        "category_name": "花草园艺",
+        "alias": ["花草", "园艺"],
+        "budget": 1000,
+        "description": "花草园艺包括但不限于花草、园艺用品、园艺服务、园艺工具等。",
+        "notes": ""
+      },
+      {
+        "category_name": "日用品",
+        "alias": ["日用品", "买日用品"],
+        "budget": 1000,
+        "description": "日用品包括但不限于洗护用品、清洁用品、纸巾、垃圾袋等家庭日常用品杂项。",
+        "notes": ""
+      },
+      {
+        "category_name": "孩子用品",
+        "alias": ["孩子用品", "买孩子用品"],
+        "budget": 1000,
+        "description": "孩子用品值孩子专用的用品，包括玩具、手工绘画材料、尿不湿，孩子专用的食物如配方奶粉、辅食等，也包括给孩子的礼物和红包等。",
+        "exclude": ["书", "HomeSchooling"],
+        "notes": ""
+      },
+      {
+        "category_name": "宽带话费",
+        "alias": ["宽带话费", "宽带", "话费", "手机费"],
+        "budget": 1000,
+        "description": "宽带话费包括但不限于手机话费、家庭电话费、家庭宽带费等。",
+        "notes": ""
+      },
+      {
+        "category_name": "旅行",
+        "alias": ["旅行", "旅游"],
+        "budget": 1000,
+        "description": "旅行只在外地(至少住一夜)期间的一切花费，包括交通费、住宿费、门票费、餐饮费、购物费、娱乐费等。",
+        "notes": ""
+      },
+      {
+        "category_name": "兴趣娱乐",
+        "alias": ["兴趣娱乐", "娱乐活动"],
+        "budget": 1000,
+        "description": "兴趣娱乐包括但不限于游乐场、兴趣爱好、游戏、棋牌、桌游等。",
+        "notes": ""
+      },
+      {
+        "category_name": "其他",
+        "alias": ["其他"],
+        "budget": -1,
+        "description": "其他，不属于任何其他类别的花费。"
       }
-    }
+    ]
+    
   },
   "routines": [
     {
