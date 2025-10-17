@@ -11,6 +11,13 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- 创建 trigram 扩展以支持相似度匹配（可用于无向量时的文本召回）
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
+-- 创建 channel_type 枚举类型（用于 user_channels 表）
+DO $$ BEGIN
+    CREATE TYPE channel_type AS ENUM ('threema', 'email', 'wechat');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
 -- 为简化的数据模型创建额外的索引和函数
 -- 创建一个用于时间范围查询的函数
 CREATE OR REPLACE FUNCTION get_date_range(period TEXT)
@@ -45,14 +52,22 @@ GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO faa;
 
 -- 可选：加速检索的索引（幂等创建）
 -- 1) 内容 trigram 索引（用于 ILIKE/相似度检索）
-CREATE INDEX IF NOT EXISTS idx_memories_content_trgm ON memories USING gin (content gin_trgm_ops);
+DO $$ BEGIN
+  BEGIN
+    CREATE INDEX IF NOT EXISTS idx_memories_content_trgm ON memories USING gin (content gin_trgm_ops);
+  EXCEPTION WHEN others THEN
+    -- 表可能不存在，稍后由 Alembic 迁移创建
+    NULL;
+  END;
+END $$;
+
 -- 2) 向量 ivfflat 索引（需要 pgvector 支持）
 -- 注意：如遇到不支持 vector_l2_ops 的环境，可改为 "USING ivfflat (embedding)" 或跳过
 DO $$ BEGIN
   BEGIN
     EXECUTE 'CREATE INDEX IF NOT EXISTS idx_memories_embedding_ivfflat ON memories USING ivfflat (embedding vector_l2_ops) WITH (lists=100)';
   EXCEPTION WHEN others THEN
-    -- 兜底：忽略索引创建失败（版本不兼容时）
+    -- 兜底：忽略索引创建失败（版本不兼容或表不存在时）
     NULL;
   END;
 END $$;

@@ -72,9 +72,9 @@ class AIEvaluator:
         api_key = settings.EVALUATOR_LLM_API_KEY or settings.OPENAI_API_KEY
         
         self.llm_client = LLMClient(
-            provider=settings.EVALUATOR_LLM_PROVIDER,
-            model=settings.EVALUATOR_LLM_MODEL,
-            base_url=settings.EVALUATOR_LLM_BASE_URL,
+            provider_name=settings.EVALUATOR_LLM_PROVIDER or "openai_compatible",
+            model=settings.EVALUATOR_LLM_MODEL or "gpt-4o-mini",
+            base_url=settings.EVALUATOR_LLM_BASE_URL or "https://api.openai.com/v1",
             api_key=api_key
         )
         self.use_cache = use_cache

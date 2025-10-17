@@ -76,39 +76,9 @@ CREATE TABLE IF NOT EXISTS family_member_accounts (
 CREATE INDEX IF NOT EXISTS ix_family_member_accounts_member_id ON family_member_accounts(member_id);
 CREATE INDEX IF NOT EXISTS ix_family_member_accounts_user_id ON family_member_accounts(user_id);
 
--- 修改 memories 表（如果需要）
-DO $$
-BEGIN
-    -- 检查 user_id 列的类型
-    IF EXISTS (
-        SELECT 1 
-        FROM information_schema.columns 
-        WHERE table_name = 'memories' 
-        AND column_name = 'user_id' 
-        AND data_type = 'character varying'
-    ) THEN
-        -- 创建临时列
-        ALTER TABLE memories ADD COLUMN user_id_new UUID;
-        
-        -- 为现有数据创建默认用户
-        INSERT INTO users (id) VALUES ('00000000-0000-0000-0000-000000000000')
-        ON CONFLICT DO NOTHING;
-        
-        -- 更新所有记录使用默认用户
-        UPDATE memories SET user_id_new = '00000000-0000-0000-0000-000000000000';
-        
-        -- 删除旧列，重命名新列
-        ALTER TABLE memories DROP COLUMN user_id;
-        ALTER TABLE memories RENAME COLUMN user_id_new TO user_id;
-        
-        -- 添加外键约束
-        ALTER TABLE memories ADD CONSTRAINT fk_memories_user 
-            FOREIGN KEY (user_id) REFERENCES users(id);
-            
-        -- 创建索引
-        CREATE INDEX idx_memories_user_id ON memories(user_id);
-    END IF;
-END $$;
+-- ⚠️ 注意：memories.user_id 类型转换已由 Alembic 迁移负责
+-- 参见：alembic/versions/20251017_fix_memories_user_id_to_uuid.py
+-- 此脚本不再包含 memories 表的修改逻辑，避免与 Alembic 冲突
 
 -- 授予权限（与 POSTGRES_USER=faa 一致）
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO faa;

@@ -5,15 +5,15 @@ services:
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: faa
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-faa_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-faa_secret}
       POSTGRES_DB: family_assistant
       TZ: Asia/Shanghai
     ports:
-      - "5432:5432"
+      - "15432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/01-init.sql
-      - ./scripts/add_user_tables.sql:/docker-entrypoint-initdb.d/02-users.sql
+      # add_user_tables.sql 已移除，所有表结构由 Alembic 统一管理
       - ./scripts/optimize_db.sql:/docker-entrypoint-initdb.d/03-optimize.sql
       - ./docker/postgresql.conf:/etc/postgresql/postgresql.conf
     command: postgres -c config_file=/etc/postgresql/postgresql.conf
@@ -29,27 +29,16 @@ services:
       dockerfile: docker/Dockerfile
     ports:
       - "8001:8000"
+    env_file:
+      - .env
     environment:
+      # 容器特定配置（覆盖 .env 中的值）
       - TZ=Asia/Shanghai
-      - DATABASE_URL=postgresql://faa:${POSTGRES_PASSWORD:-faa_password}@postgres:5432/family_assistant
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4-turbo-preview}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
-      - AI_PROVIDER=${AI_PROVIDER:-openai_compatible}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL}
-      - LOW_LLM_BUDGET=${LOW_LLM_BUDGET:-false}
-      - LLM_MAX_RETRIES=${LLM_MAX_RETRIES:-1}
-      - THREEMA_GATEWAY_ID=${THREEMA_GATEWAY_ID}
-      - THREEMA_SECRET=${THREEMA_SECRET}
-      - THREEMA_PRIVATE_KEY=${THREEMA_PRIVATE_KEY}
-      - THREEMA_WEBHOOK_URL=${THREEMA_WEBHOOK_URL}
-      - APP_ENV=${APP_ENV:-development}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - SECRET_KEY=${SECRET_KEY}
+      - DATABASE_URL=postgresql://faa:${POSTGRES_PASSWORD:-faa_secret}@postgres:5432/family_assistant
       - MCP_SERVER_URL=http://faa-mcp:8000
       - MEDIA_ROOT=/data/media
       - FASTEMBED_CACHE_PATH=/data/fastembed_cache
+      # 其他所有配置从 .env 自动加载
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,7 +53,6 @@ services:
       - ./prompts:/app/prompts
       - ./alembic:/app/alembic
       - ./family_private_data.json:/app/family_private_data.json:ro
-      - ./.env:/app/.env:ro  # 挂载 .env 文件（只读）
       - media_data:/data/media
       - fastembed_cache:/data/fastembed_cache
     command: sh -c "/app/.venv/bin/alembic upgrade head && /app/.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload"
@@ -73,13 +61,15 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+    env_file:
+      - .env
     environment:
+      # 容器特定配置（覆盖 .env 中的值）
       - TZ=Asia/Shanghai
-      - DATABASE_URL=postgresql://faa:${POSTGRES_PASSWORD:-faa_password}@postgres:5432/family_assistant
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - DATABASE_URL=postgresql://faa:${POSTGRES_PASSWORD:-faa_secret}@postgres:5432/family_assistant
       - MEDIA_ROOT=/data/media
       - FASTEMBED_CACHE_PATH=/data/fastembed_cache
+      # 其他所有配置从 .env 自动加载
     depends_on:
       postgres:
         condition: service_healthy
@@ -88,7 +78,6 @@ services:
     volumes:
       - ./mcp-server:/app/mcp-server
       - ./alembic:/app/alembic
-      - ./.env:/app/.env:ro  # 挂载 .env 文件（只读）
       - media_data:/data/media
       - fastembed_cache:/data/fastembed_cache
     command: python mcp-server/mcp_http_wrapper.py

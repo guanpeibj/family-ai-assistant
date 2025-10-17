@@ -258,7 +258,6 @@ async def sync_members(
                 is_active=is_alive,
             )
             session.add(member)
-            await session.flush()
         else:
             member.display_name = display_name
             member.relationship = relationship
@@ -266,6 +265,8 @@ async def sync_members(
             member.is_active = is_alive
 
         synced[key] = (member, profile_payload)
+
+    await session.flush()  # ← 只在最后 flush 一次，避免多次flush导致的重复约束检查
 
     for member in existing_members.values():
         member.is_active = False

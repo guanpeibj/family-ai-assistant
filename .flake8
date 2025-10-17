@@ -1,0 +1,29 @@
+[flake8]
+# 忽略规则：
+# E501 - line too long (行过长)
+# W503 - line break before binary operator (二元运算符前的行break)
+# E203 - whitespace before ':' (冒号前的空格)
+ignore = E501, W503, E203
+
+# 最大行长设置为120（默认79太短）
+max-line-length = 120
+
+# 排除不需要检查的目录和文件
+exclude = 
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    .pytest_cache,
+    .mypy_cache,
+    .ruff_cache,
+    alembic,
+    build,
+    dist,
+    *.egg-info
+
+# 每个文件前报告错误数量
+statistics = True
+
+# 在报告中显示源代码
+show-source = True

@@ -1,6 +1,6 @@
 ---
-alwaysApply: true
 description: FAA 项目结构、入口与端到端数据流
+alwaysApply: false
 ---
 ## 项目总览
 - 核心理念：工程尽量固定，能力随模型/数据/Prompt 自动进化（详见 [ARCHITECTURE.md](mdc:ARCHITECTURE.md)、[readme.MD](mdc:readme.MD)）。

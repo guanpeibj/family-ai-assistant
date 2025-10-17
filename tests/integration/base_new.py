@@ -105,18 +105,17 @@ class IntegrationTestBase:
         """内部方法：清理测试数据"""
         try:
             async with get_session() as session:
-                # 使用UUID对象进行数据库查询（SQLAlchemy支持UUID类型）
-                # 删除相关数据
+                # 使用字符串形式的user_id进行查询，因为数据库中存储的是VARCHAR
                 await session.execute(
-                    delete(Memory).where(Memory.user_id == self.test_user_uuid)
+                    delete(Memory).where(Memory.user_id == self.test_user_id)
                 )
                 await session.execute(
                     delete(Reminder).where(Reminder.memory_id.in_(
-                        select(Memory.id).where(Memory.user_id == self.test_user_uuid)
+                        select(Memory.id).where(Memory.user_id == self.test_user_id)
                     ))
                 )
                 await session.execute(
-                    delete(Interaction).where(Interaction.user_id == self.test_user_uuid)
+                    delete(Interaction).where(Interaction.user_id == self.test_user_id)
                 )
                 
                 logger.info("test_data_cleanup_complete", 
