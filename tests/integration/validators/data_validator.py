@@ -190,19 +190,40 @@ class DataValidator:
                 else:
                     score_data["score"] += 5
                 
-                # 验证类目 (5分)
+                # 验证类目 (5分，其中可拆分为类目+子类目)
+                category_full_score = 5.0
+                sub_category_full_score = 0.0
+                if "sub_category" in expected_data:
+                    category_full_score = 3.0
+                    sub_category_full_score = 2.0
+                
                 if "category" in expected_data:
                     category_score = self._verify_category(
                         memory.ai_understanding.get("category"),
                         expected_data["category"],
-                        expected.get("tolerance", {}).get("category", [])
+                        expected.get("tolerance", {}).get("category", []),
+                        full_score=category_full_score
                     )
                     score_data["score"] += category_score["score"]
                     score_data["details"]["category"] = category_score["details"]
                     if category_score.get("issues"):
                         score_data["issues"].extend(category_score["issues"])
                 else:
-                    score_data["score"] += 5
+                    score_data["score"] += category_full_score
+                
+                if "sub_category" in expected_data:
+                    sub_category_score = self._verify_category(
+                        memory.ai_understanding.get("sub_category"),
+                        expected_data["sub_category"],
+                        expected.get("tolerance", {}).get("sub_category", []),
+                        full_score=sub_category_full_score or 2.0
+                    )
+                    score_data["score"] += sub_category_score["score"]
+                    score_data["details"]["sub_category"] = sub_category_score["details"]
+                    if sub_category_score.get("issues"):
+                        score_data["issues"].extend(sub_category_score["issues"])
+                else:
+                    score_data["score"] += sub_category_full_score
                 
                 # 验证时间 (5分)
                 if "occurred_at" in expected_data:
@@ -252,7 +273,34 @@ class DataValidator:
         
         return result
     
-    def _verify_category(self, actual: Optional[str], expected: str, acceptable: List[str]) -> Dict:
+    @staticmethod
+    def _category_variants(value: Optional[Union[str, List[str]]]) -> set:
+        """Expand a category string or list to include hierarchical variants."""
+        variants = set()
+        if not value:
+            return variants
+        if isinstance(value, list):
+            for item in value:
+                variants.update(DataValidator._category_variants(item))
+            return variants
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return variants
+            parts = [p.strip() for p in raw.split('>') if p.strip()]
+            if not parts:
+                return variants
+            for i in range(1, len(parts) + 1):
+                variants.add('>'.join(parts[:i]))
+        return variants
+    
+    def _verify_category(
+        self,
+        actual: Optional[str],
+        expected: str,
+        acceptable: List[str],
+        full_score: float = 5.0
+    ) -> Dict:
         """验证类目准确性"""
         result = {"score": 0, "details": {}, "issues": []}
         
@@ -260,15 +308,21 @@ class DataValidator:
             result["issues"].append(f"类目字段为空，期望{expected}")
             return result
         
+        partial_score = round(full_score * 0.6, 2) if full_score else 0.0
+        expected_variants = self._category_variants(expected)
+        acceptable_variants = self._category_variants(acceptable)
+        actual_variants = self._category_variants(actual)
+        
         result["details"]["actual"] = actual
         result["details"]["expected"] = expected
         
-        if actual == expected:
-            result["score"] = 5
+        if actual_variants & expected_variants:
+            result["score"] = full_score
             result["details"]["status"] = "✅ 完全正确"
-        elif actual in acceptable:
-            result["score"] = 3
+        elif acceptable_variants and actual_variants & acceptable_variants:
+            result["score"] = partial_score
             result["details"]["status"] = "⚠️ 可接受"
+            result["details"]["acceptable_match"] = list(actual_variants & acceptable_variants)
         else:
             result["score"] = 0
             result["details"]["status"] = "❌ 错误"
@@ -385,4 +439,3 @@ class DataValidator:
             score_data["issues"].append(f"幂等性验证失败: {str(e)}")
             
         return score_data
-

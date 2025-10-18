@@ -10,7 +10,7 @@
 # 4. 包含关键边界情况
 
 test_suite_name: "golden_set"
-test_suite_version: "1.1"
+test_suite_version: "1.2"
 total_cases: 55
 
 # ===== 分类1：基础记账 (10个) =====
@@ -22,19 +22,19 @@ accounting_basic:
     user_input: "今天买菜花了80元"
     expected_behavior:
       intent: "记录支出"
-      key_actions: ["存储账目", "识别类目为餐饮", "记录金额80元"]
+      key_actions: ["存储账目", "识别类目为食材", "记录金额80元"]
       response_should: "确认记账成功，告知类目和金额"
     data_verification:
       should_store: true
       expected_data:
         type: "expense"
         amount: 80.0
-        category: "餐饮"
+        category: "食材"
+        sub_category: "蔬菜"
         occurred_at: "today"
       tolerance:
         amount: 0
-        category: ["餐饮", "食品"]
-      required_fields: ["type", "category", "amount"]
+      required_fields: ["type", "category", "sub_category", "amount"]
     
   - test_id: "TC002"
     test_name: "大额支出记录"
@@ -87,19 +87,21 @@ accounting_basic:
         occurred_at: "last_month_28"
 
   - test_id: "TC005"
-    test_name: "类目映射-餐饮"
+    test_name: "类目映射-外出就餐"
     priority: "P0"
     difficulty: "simple"
     user_input: "外卖花了45元"
     expected_behavior:
-      intent: "记录餐饮支出"
-      key_actions: ["识别为餐饮类"]
+      intent: "记录外出就餐支出"
+      key_actions: ["识别为外出就餐类"]
       response_should: "确认记账"
     data_verification:
       should_store: true
       expected_data:
         type: "expense"
-        category: "餐饮"
+        category: "外出就餐"
+        sub_category: "外卖"
+      required_fields: ["type", "category", "sub_category"]
 
   - test_id: "TC006"
     test_name: "类目映射-交通"
@@ -115,66 +117,72 @@ accounting_basic:
       expected_data:
         type: "expense"
         category: "交通"
+        sub_category: "打车"
+      required_fields: ["type", "category", "sub_category"]
 
   - test_id: "TC007"
-    test_name: "类目映射-医疗"
+    test_name: "类目映射-医疗保健"
     priority: "P0"
     difficulty: "simple"
     user_input: "买感冒药120元"
     expected_behavior:
-      intent: "记录医疗支出"
-      key_actions: ["识别为医疗类"]
+      intent: "记录医疗保健支出"
+      key_actions: ["识别为医疗保健类"]
       response_should: "确认记账"
     data_verification:
       should_store: true
       expected_data:
         type: "expense"
-        category: "医疗"
+        category: "医疗保健"
+        sub_category: "药品"
+      required_fields: ["type", "category", "sub_category"]
 
   - test_id: "TC008"
-    test_name: "类目映射-教育"
+    test_name: "类目映射-少儿培训"
     priority: "P0"
     difficulty: "simple"
     user_input: "孩子钢琴课200元"
     expected_behavior:
-      intent: "记录教育支出"
-      key_actions: ["识别为教育类"]
+      intent: "记录培训支出"
+      key_actions: ["识别为少儿培训类"]
       response_should: "确认记账"
     data_verification:
       should_store: true
       expected_data:
         type: "expense"
-        category: "教育"
+        category: "少儿培训"
 
   - test_id: "TC009"
-    test_name: "类目映射-居住"
+    test_name: "类目映射-住房"
     priority: "P0"
     difficulty: "simple"
     user_input: "交物业费500元"
     expected_behavior:
-      intent: "记录居住支出"
-      key_actions: ["识别为居住类"]
+      intent: "记录住房支出"
+      key_actions: ["识别为住房类"]
       response_should: "确认记账"
     data_verification:
       should_store: true
       expected_data:
         type: "expense"
-        category: "居住"
+        category: "住房"
+        sub_category: "物业费"
+      required_fields: ["type", "category", "sub_category"]
 
   - test_id: "TC010"
-    test_name: "类目映射-日用"
+    test_name: "类目映射-日用品"
     priority: "P0"
     difficulty: "simple"
     user_input: "买洗发水35元"
     expected_behavior:
-      intent: "记录日用支出"
-      key_actions: ["识别为日用类"]
+      intent: "记录日用品支出"
+      key_actions: ["识别为日用品类"]
       response_should: "确认记账"
     data_verification:
       should_store: true
       expected_data:
         type: "expense"
-        category: "日用"
+        category: "日用品"
 
 # ===== 分类2：查询功能 (10个) =====
 query_basic:
@@ -194,11 +202,11 @@ query_basic:
     test_name: "类目支出查询"
     priority: "P0"
     difficulty: "medium"
-    user_input: "这个月餐饮花了多少？"
+    user_input: "这个月食材花了多少？"
     expected_behavior:
       intent: "查询特定类目支出"
-      key_actions: ["过滤餐饮类目", "计算总额"]
-      response_should: "给出餐饮类支出金额"
+      key_actions: ["过滤食材类目", "计算总额"]
+      response_should: "给出食材类支出金额"
     data_verification:
       should_store: false
 
@@ -254,7 +262,7 @@ query_basic:
     test_name: "趋势查询"
     priority: "P1"
     difficulty: "complex"
-    user_input: "近三个月餐饮支出趋势"
+    user_input: "近三个月外出就餐支出趋势"
     expected_behavior:
       intent: "查询支出趋势"
       key_actions: ["查询3个月数据", "按月聚合", "分析趋势"]
@@ -459,7 +467,7 @@ budget:
     test_name: "设置分类预算"
     priority: "P0"
     difficulty: "complex"
-    user_input: "本月预算：餐饮3000、交通1000、教育2000"
+    user_input: "本月预算：食材3000、外出就餐1000、少儿培训2000"
     expected_behavior:
       intent: "设置分类预算"
       key_actions: ["解析多个类目", "保存各类预算"]
@@ -706,34 +714,34 @@ edge_cases:
 # ===== 补充用例：确保P0完整覆盖 (5个) =====
 p0_补充:
   - test_id: "TC051"
-    test_name: "类目映射-娱乐"
+    test_name: "类目映射-兴趣娱乐"
     priority: "P0"
     difficulty: "simple"
     user_input: "看电影100元"
     expected_behavior:
       intent: "记录娱乐支出"
-      key_actions: ["识别为娱乐类"]
+      key_actions: ["识别为兴趣娱乐类"]
       response_should: "确认记账"
     data_verification:
       should_store: true
       expected_data:
         type: "expense"
-        category: "娱乐"
+        category: "兴趣娱乐"
 
   - test_id: "TC052"
-    test_name: "类目映射-服饰"
+    test_name: "类目映射-衣服"
     priority: "P0"
     difficulty: "simple"
     user_input: "买了件衣服180元"
     expected_behavior:
-      intent: "记录服饰支出"
-      key_actions: ["识别为服饰类"]
+      intent: "记录衣服支出"
+      key_actions: ["识别为衣服类"]
       response_should: "确认记账"
     data_verification:
       should_store: true
       expected_data:
         type: "expense"
-        category: "服饰"
+        category: "衣服"
 
   - test_id: "TC053"
     test_name: "多条记录准确性"
@@ -773,7 +781,7 @@ p0_补充:
     data_verification:
       should_store: false
     context:
-      description: "前面已讨论过餐饮支出，这里测试是否能理解'花了多少'指总支出"
+      description: "前面已讨论过外出就餐支出，这里测试是否能理解'花了多少'指总支出"
 
 # ===== 多轮对话测试 (6个) =====
 # 使用 turns 字段定义多轮对话
@@ -796,16 +804,18 @@ multi_turn_tests:
         user_input: "买了手套，送给妻子"
         expected_behavior:
           intent: "补全信息并完成记账"
-          key_actions: ["存储账目", "关联到妻子", "识别为日用品或服饰"]
+          key_actions: ["存储账目", "关联到妻子", "识别为衣服或日用品"]
           response_should: "确认记账成功，告知金额和类目"
         data_verification:
           should_store: true
           expected_data:
             type: "expense"
             amount: 100.0
+            category: "衣服"
             occurred_at: "today"
           tolerance:
             amount: 0
+          required_fields: ["type", "category", "amount"]
   
   - test_id: "MT002"
     test_name: "多轮提醒-修改时间"
@@ -882,17 +892,18 @@ multi_turn_tests:
         user_input: "50元"
         expected_behavior:
           intent: "补充金额完成记账"
-          key_actions: ["存储账目", "金额50元", "类目餐饮"]
+          key_actions: ["存储账目", "金额50元", "类目食材"]
           response_should: "确认记账成功"
         data_verification:
           should_store: true
           expected_data:
             type: "expense"
             amount: 50.0
-            category: "餐饮"
+            category: "食材"
+            sub_category: "蔬菜"
           tolerance:
             amount: 0
-            category: ["餐饮", "食品"]
+          required_fields: ["type", "category", "sub_category", "amount"]
   
   - test_id: "MT005"
     test_name: "多轮信息-更新内容"
@@ -943,7 +954,7 @@ multi_turn_tests:
           should_store: false
       
       - turn: 2
-        user_input: "总预算10000元，餐饮3000、交通1000、教育2000"
+        user_input: "总预算10000元，食材3000、外出就餐1000、少儿培训2000"
         expected_behavior:
           intent: "完成预算设置"
           key_actions: ["存储预算配置", "记录各类目预算"]
@@ -952,4 +963,3 @@ multi_turn_tests:
           should_store: true
           expected_data:
             type: "budget_config"
-

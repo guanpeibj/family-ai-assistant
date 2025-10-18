@@ -79,7 +79,7 @@ python run_golden_set.py --limit 10
 {
   "conversation": [
     "user(xxx-xxx-xxx)- 今天买菜花了80元",
-    "faa- 好的，已为您记录餐饮支出80元"
+    "faa- 好的，已为您记录食材支出80元"
   ]
 }
 ```
@@ -92,7 +92,7 @@ python run_golden_set.py --limit 10
 
 ```yaml
 test_suite_name: "golden_set"
-test_suite_version: "1.1"
+test_suite_version: "1.2"
 total_cases: 61  # 55个单轮 + 6个多轮
 
 # ===== 单轮测试 =====
@@ -104,19 +104,19 @@ accounting_basic:
     user_input: "今天买菜花了80元"
     expected_behavior:
       intent: "记录支出"
-      key_actions: ["存储账目", "识别类目为餐饮", "记录金额80元"]
+      key_actions: ["存储账目", "识别类目为食材", "记录金额80元"]
       response_should: "确认记账成功，告知类目和金额"
     data_verification:
       should_store: true
-      expected_data:
-        type: "expense"
-        amount: 80.0
-        category: "餐饮"
-        occurred_at: "today"
-      tolerance:
-        amount: 0
-        category: ["餐饮", "食品"]
-      required_fields: ["type", "category", "amount"]
+    expected_data:
+      type: "expense"
+      amount: 80.0
+      category: "食材"
+      sub_category: "蔬菜"
+      occurred_at: "today"
+    tolerance:
+      amount: 0
+    required_fields: ["type", "category", "sub_category", "amount"]
 
 # ===== 多轮对话测试 =====
 multi_turn_tests:
@@ -138,16 +138,17 @@ multi_turn_tests:
         user_input: "买了手套，送给妻子"
         expected_behavior:
           intent: "补全信息并完成记账"
-          key_actions: ["存储账目", "关联到妻子", "识别为日用品或服饰"]
+          key_actions: ["存储账目", "关联到妻子", "识别为衣服或日用品"]
           response_should: "确认记账成功，告知金额和类目"
-        data_verification:
-          should_store: true
-          expected_data:
-            type: "expense"
-            amount: 100.0
-            occurred_at: "today"
-          tolerance:
-            amount: 0
+          data_verification:
+            should_store: true
+            expected_data:
+              type: "expense"
+              amount: 100.0
+              category: "衣服"
+              occurred_at: "today"
+            tolerance:
+              amount: 0
 ```
 
 ### 字段说明
@@ -182,13 +183,16 @@ data_verification:
   expected_data:      # 预期的数据内容
     type: "expense"   # 记录类型
     amount: 80.0      # 金额
-    category: "餐饮"  # 类目
+    category: "食材"  # 一级类目
+    sub_category: "蔬菜"  # 二级类目
     occurred_at: "today"  # 时间（today/recent/last_month_28等）
   tolerance:          # 容差范围
     amount: 0         # 金额容差（0表示必须精确）
-    category: ["餐饮", "食品"]  # 可接受的类目
-  required_fields: ["type", "category", "amount"]  # 必须字段
+    sub_category: ["蔬菜"]  # （可选）允许的子类目取值
+  required_fields: ["type", "category", "sub_category", "amount"]  # 必须字段
 ```
+
+- 如果配置中存在子类目，expected_data 必须同时填写 `category` 与 `sub_category`，并在 `required_fields` 中加入 `sub_category`，确保一级/二级类目都被验证。
 
 #### 多轮测试字段
 
@@ -223,15 +227,17 @@ data_verification:
   user_input: "今天买菜花了80元"
   expected_behavior:
     intent: "记录支出"
-    key_actions: ["存储账目", "识别类目为餐饮", "记录金额80元"]
+    key_actions: ["存储账目", "识别类目为食材", "记录金额80元"]
     response_should: "确认记账成功，告知类目和金额"
   data_verification:
     should_store: true
     expected_data:
       type: "expense"
       amount: 80.0
-      category: "餐饮"
+      category: "食材"
+      sub_category: "蔬菜"
       occurred_at: "today"
+    required_fields: ["type", "category", "sub_category", "amount"]
 ```
 
 #### 2. 多轮测试用例
@@ -263,13 +269,16 @@ data_verification:
       user_input: "买了手套，送给妻子"
       expected_behavior:
         intent: "补全信息并完成记账"
-        key_actions: ["存储账目", "识别为日用品或服饰"]
+        key_actions: ["存储账目", "识别为衣服或日用品"]
         response_should: "确认记账成功"
       data_verification:
         should_store: true
         expected_data:
           type: "expense"
           amount: 100.0
+          category: "衣服"
+        tolerance:
+          amount: 0
 ```
 
 **示例：修改信息**
@@ -462,7 +471,7 @@ tests/integration/reports/
       "total_score": 91,
       "conversation": [
         "user(xxx-xxx)- 今天买菜花了80元",
-        "faa- 好的，已为您记录餐饮支出80元"
+        "faa- 好的，已为您记录食材支出80元"
       ],
       "duration": 24.5,
       "success": true,

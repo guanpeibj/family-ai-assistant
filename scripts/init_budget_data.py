@@ -147,15 +147,32 @@ async def create_budget_for_month(user_id: str, expense_config: dict, year: int,
     period = f"{year}-{month:02d}"
     budget_date = datetime(year, month, 1, 0, 0, 0)
     
-    # 从层级类目中提取预算金额（扁平化，只记录有预算的类目）
+    # 从层级类目中提取预算金额（扁平化，包括二级类目）
     categories_budget = expense_config.get('monthly_categories_budget', [])
     category_budgets = {}
     
-    for cat in categories_budget:
-        cat_name = cat.get('category_name')
-        budget_val = cat.get('budget', -1)
-        if budget_val != -1:  # 只记录有预算限制的类目
-            category_budgets[cat_name] = budget_val
+    def extract_budgets(categories, parent_name=''):
+        """递归提取所有层级的预算"""
+        for cat in categories:
+            cat_name = cat.get('category_name')
+            budget_val = cat.get('budget', -1)
+            
+            # 一级类目：直接使用名称
+            if budget_val != -1:
+                category_budgets[cat_name] = budget_val
+            
+            # 处理二级类目
+            sub_categories = cat.get('sub_categories', [])
+            if sub_categories:
+                for sub_cat in sub_categories:
+                    sub_name = sub_cat.get('sub_category_name')
+                    sub_budget = sub_cat.get('budget', -1)
+                    if sub_budget != -1:
+                        # 二级类目：使用 "一级>二级" 格式
+                        full_name = f"{cat_name}>{sub_name}"
+                        category_budgets[full_name] = sub_budget
+    
+    extract_budgets(categories_budget)
     
     total_budget = expense_config.get('monthly_budget_total', 0)
     

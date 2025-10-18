@@ -656,20 +656,131 @@ blocks:
     - 如确定无需额外上下文，将 `context_requests` 设为空数组。
     - 如当前无法规划工具，返回空 `steps` 并在 `requires_context` 说明原因。
 
-  context_requests_examples: |
-    ### context_requests 示例
-    - 近期对话： {"name": "recent_history", "kind": "recent_memories", "limit": 6}
-    - 指定线程摘要： {"name": "thread_digest", "kind": "thread_summaries", "limit": 1}
-    - 语义搜索记录： {"name": "semantic_expenses", "kind": "semantic_search", "query": "近一周餐饮", "limit": 5, "filters": {"type": "expense"}}
-    - 查询预算配置： {"name": "budget_current", "kind": "direct_search", "filters": {"type": "budget", "period": "2025-09"}, "limit": 1}
-    - 查询家庭成员： {"name": "member_info", "kind": "direct_search", "filters": {"type": "family_member_profile", "person": "儿子"}, "limit": 1}
-    - 查询支出记录： {"name": "expenses", "kind": "direct_search", "filters": {"type": "expense", "date_from": "2025-09-01"}, "limit": 20}
-    - 家庭范围无需额外请求，可直接引用 `{"use_context": "household", "path": "family_scope.user_ids"}`。
+  scope_identification_guide: |
+    ## 查询范围识别指南（scope字段）
     
-    **重要提示：**
-    - 查询全局配置数据（budget、family_profile、family_member_profile等）时，使用业务字段（period、person）而非thread_id
-    - 系统会自动为对话类数据添加thread_id隔离，无需在filters中显式指定
-    - 仅在确实需要真实数据支持决策或回复时才提出请求
+    ### 核心原则
+    **默认 = 家庭全局范围（family）**
+    只有明确指定某人或引用上下文时，才使用personal或thread。
+    
+    ### scope三种类型
+    
+    #### 1. scope="family"（默认，90%的情况）
+    **查询家庭全局数据**：所有成员 + 家庭配置，不限thread_id
+    
+    **示例问题**：
+    - "这个月花了多少钱？" → family（所有人的支出）
+    - "本月预算是？" → family（家庭共享配置）
+    - "今年还有什么计划？" → family（家庭日历）
+    - "这周有哪些提醒？" → family（所有人的提醒）
+    - "孩子们的身高变化" → family（多个孩子）
+    - "最近买了什么" → family（所有人的购买记录）
+    
+    **识别要点**：
+    - 没有"我"/"你"等人称代词
+    - 没有"刚才"/"这次聊天"等上下文引用
+    - 问的是整体情况、趋势、统计
+    
+    #### 2. scope="personal"（明确指定某人）
+    **查询特定个人数据**：必须配合person字段
+    
+    **示例问题**：
+    - "我这个月的花费" → personal, person="我"
+    - "儿子的身高曲线" → personal, person="儿子"
+    - "Peter昨天买了什么" → personal, person="Peter"
+    - "妻子在食材花了多少" → personal, person="妻子"
+    - "我的提醒" → personal, person="我"
+    
+    **识别要点**：
+    - 包含明确的人称："我"/"儿子"/"Peter"/"妻子"
+    - 使用"的"连接："{人}的{数据}"
+    - 问的是个人情况，不是整体
+    
+    #### 3. scope="thread"（罕见，上下文引用）
+    **仅限当前对话线程**：上下文回溯
+    
+    **示例问题**：
+    - "刚才说的那个金额是多少" → thread
+    - "你刚提到的预算" → thread
+    - "这次聊天我说了什么" → thread
+    
+    **识别要点**：
+    - "刚才"/"刚刚"/"刚提到"
+    - "这次聊天"/"这个对话"
+    - 引用近期消息内容
+    
+    ### person字段识别（AI的职责）
+    
+    **重要**：AI负责将人称代词解析为具体的成员名字或member_key
+    
+    **识别步骤**：
+    1. 从household context获取成员信息：
+       - members[].member_key: 稳定标识（"dad", "son_1", "daughter_1"）
+       - members[].display_name: 显示名称（"Peter", "Jack", "Hannah"）
+       - members[].relationship: 关系（"father", "son", "daughter"）
+    
+    2. 解析人称代词为具体标识：
+       - "儿子" → 查找relationship="son" → person_key="son_1" 或 person="Jack"
+       - "大女儿" → 查找member_key="daughter_1" → person="Hannah"
+       - "妻子" → 根据当前用户推断 → person="minjie"
+       - "Peter" → 直接使用 → person="Peter"
+       - "我" → 保持不变 → person="我"（引擎会处理）
+    
+    3. 输出格式（优先级）：
+       - **首选**：person_key="son_1"（最准确，使用member_key）
+       - **备选**：person="Jack"（使用display_name）
+       - **兜底**：person="我"（只有"我"这一个特殊情况）
+    
+    **示例**：
+    ```json
+    // 用户问："儿子的身高"
+    // household context显示：{member_key: "son_1", display_name: "Jack", relationship: "son"}
+    // AI应该输出：
+    {
+      "entities": {
+        "scope": "personal",
+        "person_key": "son_1",  // 优先使用member_key
+        "person": "Jack"        // 或使用display_name
+      }
+    }
+    ```
+    
+    **不应该出现**：
+    - ❌ person="儿子"（应该解析为具体名字）
+    - ❌ person="女儿"（应该解析为Hannah）  
+    - ❌ person="孩子"（模糊，应该澄清或使用family）
+    
+    **无法确定时**：
+    - 如果有多个"儿子"或"女儿"，返回need_clarification=true
+    - 如果找不到对应成员，返回need_clarification=true
+    
+    ### 默认值
+    - entities.scope 默认 "family"
+    - entities.person 默认 null（scope=family或thread时）
+    - entities.person_key 优先于person使用
+  
+  context_requests_examples: |
+    ### context_requests 示例（新增scope字段）
+    
+    - 查询预算（家庭范围）： 
+      {"name": "budget_current", "kind": "direct_search", "scope": "family", "filters": {"type": "budget", "period": "2025-09"}, "limit": 1}
+    
+    - 查询支出（家庭范围）： 
+      {"name": "expenses", "kind": "direct_search", "scope": "family", "filters": {"type": "expense", "date_from": "2025-09-01"}, "limit": 20}
+    
+    - 查询个人花费： 
+      {"name": "my_expenses", "kind": "direct_search", "scope": "personal", "person": "我", "filters": {"type": "expense"}, "limit": 20}
+    
+    - 查询儿子身高： 
+      {"name": "son_height", "kind": "direct_search", "scope": "personal", "person": "儿子", "filters": {"type": "health", "metric": "身高"}, "limit": 10}
+    
+    - 线程内上下文： 
+      {"name": "thread_context", "kind": "recent_memories", "scope": "thread", "limit": 5}
+    
+    **注意**：
+    - scope默认为"family"，可省略
+    - scope="personal"时必须提供person字段
+    - 系统会根据scope自动处理user_id和thread_id，无需在filters中指定
 
   planning_brief: |
     ### 工具计划说明

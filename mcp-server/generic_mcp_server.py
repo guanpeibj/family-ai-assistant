@@ -137,12 +137,34 @@ class GenericMCPServer:
         try:
             async with self.pool.acquire() as conn:
                 results = []
-                uid = self._normalize_user_id(user_id)
-                await self._ensure_user(conn, uid)
+                
+                # 支持多user_id查询（默认全家范围）
+                # 规范化user_id：可以是单个字符串或列表
+                if isinstance(user_id, list):
+                    # 多用户查询：规范化所有user_id
+                    user_ids = []
+                    for uid_str in user_id:
+                        uid = self._normalize_user_id(uid_str)
+                        await self._ensure_user(conn, uid)
+                        user_ids.append(uid)
+                    # 使用 ANY 查询
+                    multi_user_mode = True
+                else:
+                    # 单用户查询
+                    uid = self._normalize_user_id(user_id)
+                    await self._ensure_user(conn, uid)
+                    user_ids = [uid]
+                    multi_user_mode = False
                 # 共享线程模式：当指定 shared_thread=True 且提供 thread_id 时，放宽 user_id 约束，允许跨用户按线程聚合
                 shared_thread_mode = bool(filters and filters.get('shared_thread') and filters.get('thread_id'))
                 # 对共享线程施加更严格的 limit 上限，避免全表扫
                 shared_thread_limit_cap = 30
+                
+                # 多用户模式时自动增加limit
+                if multi_user_mode and filters and filters.get('limit'):
+                    # 多用户查询时，limit需要适当放大，避免单个用户数据过少
+                    original_limit = filters['limit']
+                    filters['limit'] = min(original_limit * len(user_ids), 200)
                 
                 # 如果提供查询向量，进行语义搜索
                 if query_embedding is not None:
@@ -161,14 +183,15 @@ class GenericMCPServer:
                         """
                         params = [query_embedding_text]
                     else:
+                        # 支持多用户查询
                         sql = """
                         SELECT id, content, ai_understanding, amount, occurred_at, created_at, user_id,
                                1 - (embedding <=> $1::vector) as similarity
                         FROM memories
-                        WHERE user_id = $2 AND embedding IS NOT NULL
+                        WHERE user_id = ANY($2::uuid[]) AND embedding IS NOT NULL
                           AND COALESCE(ai_understanding->>'deleted','false') <> 'true'
                         """
-                        params = [query_embedding_text, uid]
+                        params = [query_embedding_text, user_ids]
                     
                     # 添加过滤条件（优化版：优先使用计算列）
                     if filters:
@@ -250,12 +273,13 @@ class GenericMCPServer:
                         """
                         params = []
                     else:
+                        # 支持多用户查询
                         base_sql = """
                         SELECT id, content, ai_understanding, amount, occurred_at, created_at, user_id
                         FROM memories
-                        WHERE user_id = $1
+                        WHERE user_id = ANY($1::uuid[])
                         """
-                        params = [uid]
+                        params = [user_ids]
 
                     # 软删除过滤（约定 ai_understanding.deleted=true 为软删除）
                     sql = base_sql + " AND COALESCE(ai_understanding->>'deleted','false') <> 'true'"
@@ -322,8 +346,9 @@ class GenericMCPServer:
                             
                             # JSONB过滤
                             if jsonb_filters:
+                                jsonb_filter_str = json.dumps(jsonb_filters)
                                 sql += f" AND ai_understanding @> ${len(params) + 1}::jsonb"
-                                params.append(json.dumps(jsonb_filters))
+                                params.append(jsonb_filter_str)
                         if 'limit' in filters and isinstance(filters['limit'], int):
                             limit_value = min(max(filters['limit'], 1), 200)
                         else:

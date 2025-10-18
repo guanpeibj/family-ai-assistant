@@ -29,7 +29,7 @@ class TestP0AccountingV2(IntegrationTestBase):
             message="今天买菜花了80元",
             expected_behavior={
                 "intent": "记录支出",
-                "key_actions": ["存储账目", "识别类目为餐饮", "记录金额80元"],
+                "key_actions": ["存储账目", "识别类目为食材", "记录金额80元"],
                 "response_should": "确认记账成功，告知类目和金额"
             },
             data_verification={
@@ -37,14 +37,14 @@ class TestP0AccountingV2(IntegrationTestBase):
                 "expected_data": {
                     "type": "expense",
                     "amount": 80.0,
-                    "category": "餐饮",
+                    "category": "食材",
+                    "sub_category": "蔬菜",
                     "occurred_at": "today"
                 },
                 "tolerance": {
-                    "amount": 0,
-                    "category": ["餐饮", "食品"]
+                    "amount": 0
                 },
-                "required_fields": ["type", "category", "amount"]
+                "required_fields": ["type", "category", "sub_category", "amount"]
             }
         )
     
@@ -114,26 +114,25 @@ class TestP0AccountingV2(IntegrationTestBase):
         )
     
     async def test_tc005_category_mapping_food(self):
-        """TC005: 类目映射-餐饮"""
+        """TC005: 类目映射-外出就餐"""
         await self.run_test(
             test_id="TC005",
-            test_name="类目映射-餐饮",
+            test_name="类目映射-外出就餐",
             message="外卖花了45元",
             expected_behavior={
-                "intent": "记录餐饮支出",
-                "key_actions": ["识别为餐饮类"],
+                "intent": "记录外出就餐支出",
+                "key_actions": ["识别为外出就餐类"],
                 "response_should": "确认记账"
             },
             data_verification={
                 "should_store": True,
                 "expected_data": {
                     "type": "expense",
-                    "category": "餐饮",
+                    "category": "外出就餐",
+                    "sub_category": "外卖",
                     "amount": 45.0
                 },
-                "tolerance": {
-                    "category": ["餐饮", "食品"]
-                }
+                "required_fields": ["type", "category", "sub_category", "amount"]
             }
         )
     
@@ -153,48 +152,52 @@ class TestP0AccountingV2(IntegrationTestBase):
                 "expected_data": {
                     "type": "expense",
                     "category": "交通",
+                    "sub_category": "打车",
                     "amount": 35.0
-                }
+                },
+                "required_fields": ["type", "category", "sub_category", "amount"]
             }
         )
     
     async def test_tc007_category_mapping_medical(self):
-        """TC007: 类目映射-医疗"""
+        """TC007: 类目映射-医疗保健"""
         await self.run_test(
             test_id="TC007",
-            test_name="类目映射-医疗",
+            test_name="类目映射-医疗保健",
             message="买感冒药120元",
             expected_behavior={
                 "intent": "记录医疗支出",
-                "key_actions": ["识别为医疗类"],
+                "key_actions": ["识别为医疗保健类"],
                 "response_should": "确认记账"
             },
             data_verification={
                 "should_store": True,
                 "expected_data": {
                     "type": "expense",
-                    "category": "医疗",
+                    "category": "医疗保健",
+                    "sub_category": "药品",
                     "amount": 120.0
-                }
+                },
+                "required_fields": ["type", "category", "sub_category", "amount"]
             }
         )
     
     async def test_tc008_category_mapping_education(self):
-        """TC008: 类目映射-教育"""
+        """TC008: 类目映射-少儿培训"""
         await self.run_test(
             test_id="TC008",
-            test_name="类目映射-教育",
+            test_name="类目映射-少儿培训",
             message="孩子钢琴课200元",
             expected_behavior={
                 "intent": "记录教育支出",
-                "key_actions": ["识别为教育类"],
+                "key_actions": ["识别为少儿培训类"],
                 "response_should": "确认记账"
             },
             data_verification={
                 "should_store": True,
                 "expected_data": {
                     "type": "expense",
-                    "category": "教育",
+                    "category": "少儿培训",
                     "amount": 200.0
                 }
             }
@@ -250,4 +253,3 @@ if __name__ == "__main__":
     exit_code = asyncio.run(main())
     import sys
     sys.exit(exit_code)
-

@@ -294,20 +294,38 @@ class ContextManager:
                         limit = 20
                     filters['limit'] = limit
                     
-                    # 智能判断是否需要添加thread_id：
-                    # 全局数据（budget、family_profile等）不应有thread_id限制
-                    # 只有用户交互数据（expense、chat_turn等）才需要thread_id隔离
-                    data_type = filters.get('type', '')
-                    GLOBAL_DATA_TYPES = {
-                        'budget', 'family_profile', 'family_member_profile',
-                        'family_important_info', 'family_preference', 'family_contact',
-                        'calendar_event'
-                    }
+                    scope = req.get('scope', 'family')  # context_request可以指定scope
                     
-                    # 只有当：1) thread_id存在 2) filters中没有显式指定thread_id 
-                    # 3) 数据类型不是全局类型时，才自动添加thread_id
-                    if thread_id and 'thread_id' not in filters and data_type not in GLOBAL_DATA_TYPES:
-                        filters['thread_id'] = thread_id
+                    # 获取家庭上下文（用于person解析和全家查询）
+                    from src.services.household_service import household_service
+                    household_context = await household_service.get_context()
+                    family_user_ids = household_context.get('family_scope', {}).get('user_ids', [])
+                    
+                    # 根据scope决定user_id和是否添加thread_id
+                    context_user_id = user_id
+                    if scope == 'family':
+                        # 家庭范围：使用所有家庭user_ids，不限制thread_id
+                        if family_user_ids:
+                            context_user_id = family_user_ids
+                        # 不添加thread_id过滤
+                    elif scope == 'thread':
+                        # 线程范围：当前用户 + thread_id
+                        context_user_id = user_id
+                        if thread_id and 'thread_id' not in filters:
+                            filters['thread_id'] = thread_id
+                    elif scope == 'personal':
+                        # 个人范围：解析person字段
+                        person_key = req.get('person_key')
+                        person = req.get('person')
+                        person_identifier = person_key if person_key else person
+                        
+                        if person_identifier:
+                            resolved_id = self.ai_engine.tool_executor._resolve_person_to_user_id(
+                                person_identifier, user_id, household_context
+                            )
+                            if resolved_id:
+                                context_user_id = resolved_id
+                        # 不添加thread_id
                     
                     if shared_thread:
                         filters['shared_thread'] = True
@@ -316,6 +334,8 @@ class ContextManager:
                         "context.direct_search.starting",
                         trace_id=trace_id,
                         name=name,
+                        scope=scope,
+                        user_id_type='list' if isinstance(context_user_id, list) else 'single',
                         filters=list(filters.keys())
                     )
                     
@@ -324,7 +344,7 @@ class ContextManager:
                         'search',
                         query=req.get('query', ''),
                         filters=filters,
-                        user_id=user_id,
+                        user_id=context_user_id,
                         trace_id=trace_id,
                     )
                     resolved[name] = results
@@ -472,6 +492,61 @@ class ToolExecutor:
         self.argument_processor = ToolArgumentProcessor()
         self.execution_monitor = ToolExecutionMonitor()
     
+    def _resolve_person_to_user_id(
+        self,
+        person_or_key: str,
+        current_user_id: str,
+        household_context: Dict[str, Any]
+    ) -> Optional[str]:
+        """将AI识别的person解析为user_id（极简版本，无硬编码）
+        
+        设计理念：
+        - AI负责将"儿子"/"妻子"等人称代词解析为具体名字或member_key
+        - 引擎只负责简单查找，不做任何映射逻辑
+        - 完全数据驱动，新增成员无需改代码
+        
+        Args:
+            person_or_key: AI输出的person字段（应该是具体名字或member_key）
+            current_user_id: 当前用户ID
+            household_context: 家庭上下文
+        
+        Returns:
+            解析后的user_id，如果无法解析返回None
+        """
+        if not person_or_key:
+            return None
+        
+        person_stripped = person_or_key.strip()
+        
+        # 特殊情况："我" → 当前用户（这是唯一的硬编码，因为无法从household推断）
+        if person_stripped in ['我', '我的']:
+            return current_user_id
+        
+        # 从household context中查找（数据驱动）
+        members = household_context.get('members', [])
+        members_index = household_context.get('members_index', {})
+        
+        # 1. 优先匹配member_key（最准确）
+        if person_stripped in members_index:
+            user_ids = members_index[person_stripped].get('user_ids', [])
+            return user_ids[0] if user_ids else None
+        
+        # 2. 匹配display_name（大小写不敏感）
+        person_lower = person_stripped.lower()
+        for member in members:
+            display_name = member.get('display_name', '')
+            if display_name.lower() == person_lower:
+                user_ids = member.get('user_ids', [])
+                return user_ids[0] if user_ids else None
+        
+        # 3. 无法解析：返回None（AI应该输出更明确的标识）
+        logger.warning(
+            "person_resolution.failed",
+            person=person_or_key,
+            available_members=[m.get('display_name') for m in members]
+        )
+        return None
+    
     async def execute_tool_plan(
         self,
         steps: List[Dict[str, Any]],
@@ -605,13 +680,93 @@ class ToolExecutor:
             last_aggregate_result=last_aggregate_result
         )
         
-        # 处理家庭范围查询
-        if 'user_id' in args and isinstance(args['user_id'], str):
-            if args['user_id'] in {'family', 'family_scope'}:
-                household_scope = context_data.get('household', {}).get('family_scope', {})
-                user_ids = household_scope.get('user_ids', [])
-                if user_ids:
-                    args['user_id'] = user_ids
+        # 方案B4：基于AI识别的scope智能处理user_id和thread_id
+        # 核心理念：默认全家范围，AI明确指定时才按人或线程过滤
+        if tool_name in ['search', 'aggregate'] and 'user_id' not in args:
+            # 获取家庭上下文
+            household_scope = context_data.get('household', {}).get('family_scope', {})
+            all_family_user_ids = household_scope.get('user_ids', [])
+            household_context = context_data.get('household', {})
+            
+            # 从AI的understanding中获取scope和person
+            scope = understanding.get('entities', {}).get('scope', 'family')
+            person = understanding.get('entities', {}).get('person')
+            
+            if scope == 'family':
+                # 家庭范围（默认）：所有家庭成员，不限thread_id
+                if all_family_user_ids:
+                    args['user_id'] = all_family_user_ids
+                else:
+                    args['user_id'] = user_id
+                # 不添加thread_id过滤（家庭数据跨线程共享）
+                
+                logger.debug(
+                    "tool_args.scope_family",
+                    trace_id=trace_id,
+                    tool=tool_name,
+                    family_count=len(all_family_user_ids) if isinstance(all_family_user_ids, list) else 1
+                )
+                
+            elif scope == 'thread':
+                # 线程范围：当前用户 + 限制thread_id
+                args['user_id'] = user_id
+                # 自动添加thread_id（如果工具参数中没有明确指定）
+                if 'filters' in args and thread_id and 'thread_id' not in args.get('filters', {}):
+                    if 'filters' not in args:
+                        args['filters'] = {}
+                    args['filters']['thread_id'] = thread_id
+                
+                logger.debug(
+                    "tool_args.scope_thread",
+                    trace_id=trace_id,
+                    tool=tool_name,
+                    user_id=user_id,
+                    thread_id=thread_id
+                )
+                
+            elif scope == 'personal':
+                # 个人范围：解析person为具体user_id
+                # 优先使用person_key（member_key），其次使用person（display_name）
+                person_key = understanding.get('entities', {}).get('person_key')
+                person_identifier = person_key if person_key else person
+                
+                resolved_user_id = None
+                if person_identifier:
+                    resolved_user_id = self._resolve_person_to_user_id(
+                        person_identifier, user_id, household_context
+                    )
+                
+                if resolved_user_id:
+                    args['user_id'] = resolved_user_id
+                else:
+                    # 解析失败，回退到当前用户
+                    args['user_id'] = user_id
+                    logger.warning(
+                        "tool_args.person_resolution_failed",
+                        trace_id=trace_id,
+                        person_key=person_key,
+                        person=person,
+                        fallback_to_current_user=True
+                    )
+                
+                logger.debug(
+                    "tool_args.scope_personal",
+                    trace_id=trace_id,
+                    tool=tool_name,
+                    person_key=person_key,
+                    person=person,
+                    resolved_user_id=args['user_id']
+                )
+            
+            else:
+                # 未识别的scope，回退到family
+                args['user_id'] = all_family_user_ids if all_family_user_ids else user_id
+                logger.warning(
+                    "tool_args.unknown_scope",
+                    trace_id=trace_id,
+                    scope=scope,
+                    fallback='family'
+                )
         
         # 自动添加 user_id（如果工具需要）
         if await self.capability_analyzer.requires_user_id(
