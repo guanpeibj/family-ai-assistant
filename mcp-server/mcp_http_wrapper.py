@@ -57,6 +57,7 @@ async def call_tool(tool_name: str, request: Dict[str, Any]):
             'schedule_reminder': mcp_server._schedule_reminder,
             'get_pending_reminders': mcp_server._get_pending_reminders,
             'mark_reminder_sent': mcp_server._mark_reminder_sent,
+            'list_reminder_user_ids': mcp_server._list_reminder_user_ids,
             'batch_store': mcp_server._batch_store,
             'batch_search': mcp_server._batch_search,
             'update_memory_fields': mcp_server._update_memory_fields,
@@ -229,7 +230,13 @@ async def list_tools():
             {
                 "name": "schedule_reminder",
                 "description": "为某个记忆设置提醒",
-                "parameters": ["memory_id", "remind_at"],
+                "parameters": ["memory_id", "remind_at", "payload", "external_key"],
+                "x_parameters_detail": [
+                    {"name": "memory_id", "type": "string", "required": True, "description": "关联的记忆ID"},
+                    {"name": "remind_at", "type": "string", "required": True, "description": "ISO8601 或日期字符串"},
+                    {"name": "payload", "type": "object", "required": False, "description": "AI 决定的附加信息（scope/person/message模板等）"},
+                    {"name": "external_key", "type": "string", "required": False, "description": "可选幂等键，重复调用则更新"}
+                ],
                 "x_latency_hint": "low",
                 "x_time_budget": 2.0,
                 "x_common_failures": ["invalid_memory_id", "time_format_error", "db_unavailable"]
@@ -240,6 +247,14 @@ async def list_tools():
                 "parameters": ["user_id"],
                 "x_latency_hint": "low",
                 "x_time_budget": 3.0,
+                "x_common_failures": ["db_unavailable"]
+            },
+            {
+                "name": "list_reminder_user_ids",
+                "description": "列出仍有未发送提醒的用户ID",
+                "parameters": [],
+                "x_latency_hint": "low",
+                "x_time_budget": 2.0,
                 "x_common_failures": ["db_unavailable"]
             },
             {

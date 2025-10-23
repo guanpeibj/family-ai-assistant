@@ -1,209 +1,477 @@
 """
-AI引擎V2 - 智能增强版
+AI Engine v3 - Unified Plan-Act Loop
+====================================
 
-设计理念：
-1. AI 完全主导业务逻辑，工程层只提供基础设施
-2. 通过统一的契约结构让 AI 自主处理所有对话复杂度
-3. 数据结构开放，AI 可以自由决定存储内容
-4. 工具调用完全通用化，不含业务逻辑
+该模块实现 FAA 核心的单循环智能体编排器，围绕以下目标展开：
 
-增强特性（V2）：
-1. 智能Context管理 - 主动获取多维度相关信息
-2. 思考循环支持 - 最多3轮深度分析，逐步深化理解
-3. 工具反馈优化 - 执行后验证结果，必要时自动补充
+核心原则
+--------
+1. **AI 主导**：所有业务判断、工具规划、补救策略均交由 LLM 决策，工程层只负责执行。
+2. **工程极简**：提供统一的数据管道、可观测日志与安全兜底，不在代码中写死业务流程。
+3. **可扩展**：上下文裁剪、工具调用、最终回复均以契约驱动，可随 prompt / 模型演进而迭代。
 
-核心流程（增强版）：
-用户输入 → 
-[思考循环] 统一AI理解（含智能上下文） → 
-[验证循环] 工具计划 → 执行 → 验证 → 
-回复生成
-
-参考文档： docs/V2_INTELLIGENCE_UPGRADE.md
+主要组件
+--------
+- `AgentActionModel` / `AgentFinalResponseModel`：LLM 输入输出契约。
+- `AgentState`：保存单轮对话的所有步骤、观测、上下文快照。
+- `ContextManager`：负责编排记忆、家庭信息与动态上下文的预算与获取。
+- `AIEngineV2`：总控协调器，驱动 Plan→Act→Observe 循环、处理工具结果并生成最终回复。
 """
-import json
-import re  # 用于占位符解析
-from typing import Dict, Any, Optional, List, Tuple
-from datetime import datetime, timedelta
-import uuid
-import time
-import asyncio  # 用于异步计时和事件循环
-from pydantic import BaseModel, Field, ValidationError
-import structlog
-import httpx
-import os
+from __future__ import annotations
 
+import asyncio
+import calendar
+import json
+import os
+import time
+import uuid
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
+
+import httpx
+import structlog
+from pydantic import BaseModel, Field, ValidationError
+
+from .core.ab_testing import ExperimentResult, ab_testing_manager, get_experiment_version
 from .core.config import settings
-from .core.prompt_manager import prompt_manager
-from .core.llm_client import LLMClient
+from .core.context_policy import ContextPolicy, DynamicKeyPolicy
 from .core.exceptions import (
-    AIEngineError, AnalysisError, ContextResolutionError, ToolPlanningError,
-    MCPToolError, ToolTimeoutError, ToolExecutionError, LLMError,
-    create_error_context, get_user_friendly_message
+    AIEngineError,
+    ContextResolutionError,
+    LLMError,
+    MCPToolError,
+    ToolExecutionError,
+    create_error_context,
+    get_user_friendly_message,
 )
-from .core.tool_helper import ToolCapabilityAnalyzer, ToolArgumentProcessor, ToolExecutionMonitor
-from .core.ab_testing import get_experiment_version, ab_testing_manager, ExperimentResult
-from .services.media_service import make_signed_url
+from .core.llm_client import LLMClient
+from .core.prompt_manager import prompt_manager
 from .services.household_service import household_service
+from .services.media_service import make_signed_url
 
 logger = structlog.get_logger(__name__)
 
-# 统一的分析契约模型
-class ContextRequestModel(BaseModel):
-    """AI 请求的上下文数据模型"""
-    name: str  # 上下文名称，用于后续引用
-    kind: str  # 类型：recent_memories/semantic_search/direct_search/thread_summaries
-    limit: Optional[int] = None  # 返回数量限制
-    query: Optional[str] = None  # 查询条件或语义搜索内容
-    filters: Optional[Dict[str, Any]] = None  # 精确过滤条件
-    notes: Optional[str] = None  # 额外说明
+# -----------------------------------------------------------------------------
+# Agent 数据结构
+# -----------------------------------------------------------------------------
 
-class ToolStepModel(BaseModel):
-    """工具执行步骤模型"""
-    tool: str  # 工具名称（如 store/search/aggregate）
-    args: Dict[str, Any] = Field(default_factory=dict)  # 工具参数
 
-class ToolPlanModel(BaseModel):
-    """工具执行计划模型（增强版）"""
-    requires_context: List[str] = Field(default_factory=list)  # 需要的上下文依赖
-    steps: List[ToolStepModel] = Field(default_factory=list)  # 执行步骤列表
-    # 工具结果验证相关
-    verification: Optional[Dict[str, Any]] = None  # 验证配置
+class AgentActionModel(BaseModel):
+    """
+    LLM 输出的一次行动契约。
 
-class UnderstandingModel(BaseModel):
-    """AI 理解结果模型 - 核心契约结构（增强版）"""
-    intent: Optional[str] = None  # 识别的用户意图
-    entities: Dict[str, Any] = Field(default_factory=dict)  # 提取的实体信息
-    need_action: bool = False  # 是否需要执行操作
-    need_clarification: bool = False  # 是否需要澄清信息
-    missing_fields: List[str] = Field(default_factory=list)  # 缺失的必要字段
-    clarification_questions: List[str] = Field(default_factory=list)  # 澄清问题列表
-    suggested_reply: Optional[str] = None  # AI 建议的回复
-    context_link: Optional[Dict[str, Any]] = None  # 上下文关联（如作用范围）
-    occurred_at: Optional[str] = None  # 事件发生时间
-    update_existing: Optional[bool] = None  # 是否更新已有记录
-    original_content: Optional[str] = None  # 原始用户消息（用于日志和调试）
-    # 思考循环相关字段
-    thinking_depth: int = 0  # 思考深度（0-3）
-    needs_deeper_analysis: bool = False  # 是否需要更深入分析
-    analysis_reasoning: Optional[str] = None  # 分析推理过程
-    next_exploration_areas: List[str] = Field(default_factory=list)  # 下一步探索方向
-    metadata: Dict[str, Any] = Field(default_factory=dict)  # 其他元数据
+    字段含义：
+    - `thought`：本轮执行前的思考过程，便于调试和复盘。
+    - `action`：要采取的动作类型（call_tool / fetch_context / respond / clarify / finalize 等）。
+    - `tool`：当 action 为 call_tool 时指定 MCP 工具名称。
+    - `input`：动作参数，允许是字符串 / JSON / 列表，稍后通过 `normalized_input` 统一成 dict。
+    - `expected_outcome`：对行动结果的预期描述，帮助后续回合进行验证。
+    - `stop`：布尔值，指示本次行动后是否立即退出主循环。
+    - `metadata`：扩展字段，预留给 prompt 实验或 A/B 测试时使用。
+    """
 
-class AnalysisModel(BaseModel):
-    """AI 分析结果完整模型 - 统一契约"""
-    understanding: UnderstandingModel  # 理解结果
-    context_requests: List[ContextRequestModel] = Field(default_factory=list)  # 需要的上下文
-    tool_plan: ToolPlanModel = Field(default_factory=ToolPlanModel)  # 工具执行计划
-    response_directives: Dict[str, Any] = Field(default_factory=dict)  # 响应指令（如风格）
+    thought: Optional[str] = Field(default=None, description="行动前的思考")
+    action: str = Field(..., description="行动类型：call_tool/fetch_context/respond/clarify/no_op")
+    tool: Optional[str] = Field(default=None, description="当调用工具时的工具名称")
+    input: Any = Field(default_factory=dict, description="行动输入，可为字符串或对象")
+    expected_outcome: Optional[str] = Field(default=None, description="预期目标")
+    stop: bool = Field(default=False, description="是否立即终止循环")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="额外元数据")
+
+    def normalized_input(self) -> Dict[str, Any]:
+        """
+        将 input 规范化为字典，方便后续处理。
+
+        - prompt 可能输出字符串 / 列表 / 字典，本方法统一转换为 dict。
+        - 如果是字符串，优先尝试解析 JSON；解析失败则包裹在 `{"value": 原串}`。
+        - 如果是列表，转换为 `{"items": [...]}`，便于兼容多请求的场景。
+        """
+        if isinstance(self.input, dict):
+            return self.input
+        if isinstance(self.input, list):
+            return {"items": self.input}
+        if isinstance(self.input, str) and self.input.strip():
+            try:
+                parsed = json.loads(self.input)
+                if isinstance(parsed, dict):
+                    return parsed
+                return {"value": parsed}
+            except Exception:
+                return {"value": self.input}
+        return {}
+
+
+class AgentFinalResponseModel(BaseModel):
+    """
+    LLM 最终输出契约。
+
+    字段含义：
+    - `reply`：返回给用户的文本回复。
+    - `memory_record`：用于写入长期记忆的结构化数据（intent、entities、should_store 等）。
+    - `followups`：建议的后续追问或提醒列表。
+    - `status`：整体状态，便于上层统计（success / warning / error）。
+    """
+
+    reply: str = Field(..., description="返回给用户的文本")
+    memory_record: Dict[str, Any] = Field(default_factory=dict, description="用于记忆存储的结构化数据")
+    followups: List[str] = Field(default_factory=list, description="推荐的后续问题")
+    status: str = Field(default="success", description="最终状态标记")
+
+
+class AgentState:
+    """
+    保存单次对话生命周期内所有状态信息。
+
+    功能概述：
+    - 维护会话级元信息（user/thread/channel/trace）。
+    - 累积每轮的行动记录与 observation，供后续提示词引用。
+    - 管理上下文预算轮次（`context_round`），保证逐步扩容而非一次性灌入。
+    - 构建 LLM 所需的结构化 payload（规划、总结阶段）。
+    """
+
+    def __init__(self, *, user_id: str, thread_id: Optional[str], channel: Optional[str], trace_id: str, user_message: str) -> None:
+        """初始化会话状态并记录基础元信息。"""
+        # 中文注释：记录对话元信息，便于日志追踪和上下文生成
+        self.user_id = user_id
+        self.thread_id = thread_id
+        self.channel = channel
+        self.trace_id = trace_id
+        self.original_user_message = user_message
+        self.created_at = time.monotonic()
+
+        # 中文注释：记录每一步的思考、行动与观察摘要
+        self.steps: List[Dict[str, Any]] = []
+        self.observation_summaries: List[str] = []
+        self.latest_observation: Optional[Dict[str, Any]] = None
+        # 中文注释：raw_observations 保存完整的工具/上下文结果，LLM 可按需引用
+        self.raw_observations: Dict[int, Dict[str, Any]] = {}
+
+        # 中文注释：raw_context 保存真实数据；context_round 控制定额预算
+        self.raw_context: Dict[str, Any] = {}
+        self.context_round: int = 0
+        self.metadata: Dict[str, Any] = {}
+
+    @property
+    def step_count(self) -> int:
+        """返回已记录的行动次数。"""
+        return len(self.steps)
+
+    def add_step(self, action: AgentActionModel, observation: Dict[str, Any]) -> None:
+        """
+        记录单步行动与观测结果。
+
+        - 会把 action/observation 的关键信息压缩后追加到 steps。
+        - 通过 `_shrink_data` 控制 observation 中 data 的体积，避免提示词爆炸。
+        - 维护 `observation_summaries` 供 LLM 查看最近摘要。
+        """
+        step_index = self.step_count + 1
+        summary = observation.get("summary")
+        observation_entry: Dict[str, Any] = {
+            "success": observation.get("success"),
+            "summary": summary,
+            "type": observation.get("type"),
+            "error": observation.get("error"),
+        }
+        if "data" in observation:
+            data_preview = self._shrink_data(observation.get("data"))
+            observation_entry["data_preview"] = data_preview
+            # 中文注释：兼容旧版提示词，保留 data 字段但仅提供截断内容
+            observation_entry["data"] = data_preview
+        if "update_context" in observation and isinstance(observation["update_context"], dict):
+            observation_entry["update_context_keys"] = list(observation["update_context"].keys())
+        if "terminate" in observation:
+            observation_entry["terminate"] = observation.get("terminate")
+        if "ref" in observation:
+            observation_entry["ref"] = observation.get("ref")
+
+        observation.setdefault("ref", f"observation:{step_index}")
+
+        self.steps.append(
+            {
+                "index": step_index,
+                "thought": action.thought,
+                "action": action.action,
+                "tool": action.tool,
+                "input": action.normalized_input(),
+                "expected_outcome": action.expected_outcome,
+                "stop": action.stop,
+                "observation": observation_entry,
+            }
+        )
+        if isinstance(summary, str) and summary:
+            self.observation_summaries.append(summary)
+        self.latest_observation = observation
+        self.raw_observations[step_index] = observation
+
+    def get_observation_by_ref(self, ref: Optional[str]) -> Optional[Dict[str, Any]]:
+        """
+        根据 ref 获取完整的 observation 数据。
+
+        中文注释：ref 形如 `observation:3`，供 LLM 在需要时通过 fetch_context 拿到全量信息。
+        """
+        if not ref or not isinstance(ref, str):
+            return None
+        if not ref.startswith("observation:"):
+            return None
+        try:
+            index = int(ref.split(":", 1)[1])
+        except (ValueError, IndexError):
+            return None
+        return self.raw_observations.get(index)
+
+    def _shrink_data(self, data: Any, *, depth: int = 0) -> Any:
+        """
+        对工具返回的数据进行安全裁剪。
+
+        递归地限制列表长度、字典键数量以及字符串长度，确保写入步骤日志时足够精简。
+        `depth` 参数用于递归时逐级收紧裁剪阈值。
+        """
+        if data is None:
+            return None
+        if isinstance(data, str):
+            return data if len(data) <= 200 else f"{data[:200]}..."
+        if isinstance(data, list):
+            limit = 3 if depth == 0 else 2
+            return [self._shrink_data(item, depth=depth + 1) for item in data[:limit]]
+        if isinstance(data, dict):
+            limit = 5 if depth == 0 else 3
+            trimmed: Dict[str, Any] = {}
+            for idx, (key, value) in enumerate(data.items()):
+                if idx >= limit:
+                    trimmed["__more__"] = f"... trimmed {len(data) - limit} keys"
+                    break
+                trimmed[key] = self._shrink_data(value, depth=depth + 1)
+            return trimmed
+        return data
+
+    def build_planning_payload(self, *, context_view: Dict[str, Any], max_turns: int) -> Dict[str, Any]:
+        """
+        生成供 LLM 规划用的 JSON 载荷。
+
+        包含：
+        - 用户与渠道信息。
+        - 最近几轮动作与 observation 摘要，帮助模型衔接上下文。
+        - 当前的上下文视图与剩余回合数。
+        """
+        recent_steps = self.steps[-3:]
+        recent_observations = self.observation_summaries[-3:]
+        remaining = max(0, max_turns - self.step_count)
+        return {
+            "user": {
+                "id": self.user_id,
+                "thread_id": self.thread_id,
+                "channel": self.channel,
+            },
+            "conversation": {
+                "original_user_message": self.original_user_message,
+                "recent_steps": recent_steps,
+                "recent_observations": recent_observations,
+            },
+            "context": context_view,
+            "meta": {
+                "remaining_turns": remaining,
+                "trace_id": self.trace_id,
+            },
+        }
+
+    def build_final_payload(self, *, context_view: Dict[str, Any], status: str, reason: Optional[str]) -> Dict[str, Any]:
+        """
+        生成最终总结阶段的 JSON 载荷。
+
+        汇总所有步骤、上下文视图以及结束原因，供最终回复 prompt 使用。
+        """
+        return {
+            "user": {
+                "id": self.user_id,
+                "thread_id": self.thread_id,
+                "channel": self.channel,
+            },
+            "conversation": {
+                "original_user_message": self.original_user_message,
+                "steps": self.steps,
+                "latest_observation": self.latest_observation,
+            },
+            "context": context_view,
+            "status": status,
+            "reason": reason,
+        }
+
+
+# -----------------------------------------------------------------------------
+# 消息与上下文工具
+# -----------------------------------------------------------------------------
 
 
 class MessageProcessor:
-    """消息处理器 - 负责消息预处理和内容合并"""
-    
+    """
+    负责在进入智能体前对用户消息进行预处理。
+
+    主要工作：
+    - 将语音转写、OCR、视觉摘要等附件衍生文本整合到主消息中。
+    - 保留原始文本顺序，方便 LLM 获取完整语境。
+    """
+
     @staticmethod
     def merge_attachment_texts(content: str, attachments: Optional[List[Dict[str, Any]]]) -> str:
-        """合并附件衍生文本到消息内容"""
+        """
+        合并附件文本。
+
+        优先级：语音转写 (`transcription.text`) > OCR 文本 > 视觉摘要。
+        当存在多个衍生文本时，会在正文后附加 `[附件提取]` 段落。
+        """
         if not attachments:
             return content
-        
         derived_texts: List[str] = []
         for att in attachments:
             if not isinstance(att, dict):
                 continue
-            
-            # 优先级：转写 > OCR > 视觉摘要
             text = None
-            if isinstance(att.get('transcription'), dict):
-                text = att['transcription'].get('text')
+            if isinstance(att.get("transcription"), dict):
+                text = att["transcription"].get("text")
             if not text:
-                text = att.get('ocr_text')
+                text = att.get("ocr_text")
             if not text:
-                text = att.get('vision_summary')
-            
+                text = att.get("vision_summary")
             if text:
                 derived_texts.append(str(text))
-        
-        if derived_texts:
-            base = (content or '').strip()
-            extra = "\n\n[附件提取]\n" + "\n".join(derived_texts)
-            return f"{base}{extra}" if base else "\n".join(derived_texts)
-        
-        return content
+        if not derived_texts:
+            return content
+        base = (content or "").strip()
+        extra = "\n\n[附件提取]\n" + "\n".join(derived_texts)
+        return f"{base}{extra}" if base else "\n".join(derived_texts)
 
 
 class ContextManager:
-    """上下文管理器 - 负责获取和解析各种上下文数据"""
-    
-    def __init__(self, ai_engine):
+    """
+    统一管理智能体所需的上下文。
+
+    负责：
+    - 从记忆库与家庭服务拉取原始数据。
+    - 根据预算裁剪上下文并生成给 LLM 的视图。
+    - 按需执行语义/直接搜索，满足 LLM 的补充请求。
+    """
+
+    def __init__(self, ai_engine: "AIEngineV2") -> None:
+        """记录引擎引用并装载上下文策略。"""
         self.ai_engine = ai_engine
-    
+        self.policy = ContextPolicy()
+        self._reserved_context_keys = {"light_context", "household", "insights"}
+        # 中文注释：缓存家庭信息，避免每轮重复访问服务
+        self._household_cache: Dict[str, Any] = {}
+        self._household_cache_expire: float = 0.0
+
+
     async def get_basic_context(
-        self, 
-        user_id: str, 
-        thread_id: Optional[str], 
+        self,
+        user_id: str,
+        thread_id: Optional[str],
         shared_thread: bool,
-        channel: Optional[str]
+        channel: Optional[str],
     ) -> Dict[str, Any]:
-        """获取基础上下文数据"""
-        start_time = asyncio.get_event_loop().time()
+        """
+        拉取基础上下文。
+
+        返回值：
+        - `light_context`：最近对话片段，帮助 LLM 理解语境。
+        - `household`：家庭成员结构与 family_scope，供 scope 判定与人称解析。
+        """
+        loop = asyncio.get_event_loop()
+        start_time = loop.time()
         try:
-            # 1. 最近对话记录
-            logger.debug(
-                "context.basic.fetching_memories",
+            # 中文注释：并发获取轻量记忆、家庭信息与线程摘要
+            memory_task = asyncio.create_task(
+                self._get_recent_memories(
+                    user_id=user_id,
+                    limit=self.policy.light_context["limit"],
+                    thread_id=thread_id,
+                    shared_thread=shared_thread,
+                    channel=channel,
+                )
+            )
+            household_task = asyncio.create_task(self._get_household_context())
+            thread_task = asyncio.create_task(self._get_thread_summary(user_id, thread_id))
+
+            light_context, household_context, thread_summary = await asyncio.gather(
+                memory_task,
+                household_task,
+                thread_task,
+                return_exceptions=True,
+            )
+
+            if isinstance(light_context, Exception):
+                logger.warning("context.memories.failed", error=str(light_context))
+                light_context = []
+            else:
+                logger.info(
+                    "context.memories.fetched",
+                    duration_ms=int((loop.time() - start_time) * 1000),
+                    count=len(light_context),
+                )
+
+            if isinstance(household_context, Exception):
+                logger.warning("context.household.failed", error=str(household_context))
+                household_context = {}
+
+            if isinstance(thread_summary, Exception):
+                logger.debug("context.thread_summary.unavailable", thread_id=thread_id, error=str(thread_summary))
+                thread_summary = None
+            elif thread_summary:
+                logger.debug(
+                    "context.thread_summary.attached",
+                    thread_id=thread_id,
+                    has_scratchpad=bool(thread_summary.get("thread_scratchpad")),
+                )
+
+            logger.info(
+                "context.basic.ready",
+                duration_ms=int((loop.time() - start_time) * 1000),
                 user_id=user_id,
-                thread_id=thread_id,
-                shared_thread=shared_thread
             )
-            
-            memory_start = asyncio.get_event_loop().time()
-            light_context = await self._get_recent_memories(
-                user_id=user_id,
-                limit=4,
-                thread_id=thread_id,
-                shared_thread=shared_thread,
-                channel=channel,
-            )
-            
-            logger.info(
-                "context.memories.fetched",
-                count=len(light_context),
-                duration_ms=int((asyncio.get_event_loop().time() - memory_start) * 1000),
-                memory_preview=[{
-                    'content': m.get('content', '')[:50],
-                    'time': m.get('time')
-                } for m in light_context[:2]]  # 只显示前2条
-            )
-            
-            # 2. 家庭结构上下文
-            household_start = asyncio.get_event_loop().time()
-            household_context = await household_service.get_context()
-            
-            logger.info(
-                "context.household.fetched",
-                duration_ms=int((asyncio.get_event_loop().time() - household_start) * 1000),
-                members=len(household_context.get('members', [])),
-                names=[m.get('display_name') for m in household_context.get('members', [])]
-            )
-            
-            logger.info(
-                "context.basic.complete",
-                total_duration_ms=int((asyncio.get_event_loop().time() - start_time) * 1000),
-                memories_count=len(light_context),
-                household_members=len(household_context.get('members', []))
-            )
-            
-            return {
-                'light_context': light_context,
-                'household': household_context
+
+            context_payload = {
+                "light_context": light_context,
+                "household": household_context,
             }
-        except Exception as e:
+            if thread_summary:
+                context_payload["thread_summary"] = thread_summary
+            return context_payload
+        except Exception as exc:
             logger.warning(
-                "basic_context.failed",
-                error=str(e),
-                duration_ms=int((asyncio.get_event_loop().time() - start_time) * 1000)
+                "context.basic.failed",
+                error=str(exc),
+                duration_ms=int((asyncio.get_event_loop().time() - start_time) * 1000),
             )
-            return {'light_context': [], 'household': {}}
-    
+            return {"light_context": [], "household": {}}
+
+    async def _get_household_context(self) -> Dict[str, Any]:
+        """
+        获取家庭信息，带本地缓存。
+
+        中文注释：家庭结构更新频率低，通过简单 TTL 缓存减少后端压力。
+        """
+        loop = asyncio.get_event_loop()
+        now = loop.time()
+        if self._household_cache and now < self._household_cache_expire:
+            logger.debug(
+                "context.household.cache_hit",
+                ttl_ms=int((self._household_cache_expire - now) * 1000),
+            )
+            return self._household_cache
+
+        start = now
+        payload = await household_service.get_context()
+        payload = payload or {}
+        duration_ms = int((loop.time() - start) * 1000)
+        self._household_cache = payload
+        self._household_cache_expire = loop.time() + 60.0
+        logger.info(
+            "context.household.refresh",
+            duration_ms=duration_ms,
+            members=len(payload.get("members", [])),
+        )
+        return payload
+
     async def resolve_context_requests(
         self,
         context_requests: List[Dict[str, Any]],
@@ -212,36 +480,41 @@ class ContextManager:
         thread_id: Optional[str],
         shared_thread: bool,
         channel: Optional[str],
-        trace_id: str
+        trace_id: str,
+        existing_context: Optional[Dict[str, Any]] = None,
+        agent_state: Optional[AgentState] = None,
     ) -> Dict[str, Any]:
-        """解析 AI 请求的额外上下文"""
+        """
+        根据 LLM 指令获取补充上下文。
+
+        - 支持 recent_memories / semantic_search / direct_search / context_ref / observation_ref。
+        - 若 `existing_context` 已包含目标 name，则直接复用。
+        - 所有操作均带日志，方便回溯性能与命中率。
+        """
         if not context_requests:
             return {}
-        
-        start_time = asyncio.get_event_loop().time()
         resolved: Dict[str, Any] = {}
-        
         logger.info(
-            "context.requests.resolving",
+            "context.requests.start",
             trace_id=trace_id,
             count=len(context_requests),
-            types=[req.get('kind') for req in context_requests if isinstance(req, dict)],
-            names=[req.get('name') for req in context_requests if isinstance(req, dict)]
+            kinds=[req.get("kind") for req in context_requests if isinstance(req, dict)],
         )
-        
         for req in context_requests:
             if not isinstance(req, dict):
                 continue
-                
-            name = req.get('name')
-            kind = req.get('kind')
+            name = req.get("name")
+            kind = req.get("kind")
             if not name or not kind:
                 continue
-            
-            req_start = asyncio.get_event_loop().time()
+            if existing_context and name in existing_context:
+                logger.debug("context.requests.cache_hit", trace_id=trace_id, name=name)
+                resolved[name] = existing_context[name]
+                continue
+            start = asyncio.get_event_loop().time()
             try:
-                if kind == 'recent_memories':
-                    limit = int(req.get('limit', 6))
+                if kind == "recent_memories":
+                    limit = int(req.get("limit", 6))
                     resolved[name] = await self._get_recent_memories(
                         user_id=user_id,
                         limit=limit,
@@ -249,1959 +522,1797 @@ class ContextManager:
                         shared_thread=shared_thread,
                         channel=channel,
                     )
-                
-                elif kind == 'semantic_search':
-                    query = req.get('query') or understanding.get('original_content', '')
-                    limit = int(req.get('limit', 5))
-                    
-                    logger.debug(
-                        "context.semantic_search.starting",
-                        trace_id=trace_id,
-                        name=name,
-                        query_preview=query[:50] + '...' if len(query) > 50 else query,
-                        limit=limit
-                    )
-                    
-                    search_start = asyncio.get_event_loop().time()
-                    results = await self._semantic_search(
+                elif kind == "semantic_search":
+                    query = req.get("query") or understanding.get("original_content", "")
+                    if not query:
+                        resolved[name] = []
+                    else:
+                        top_k = int(req.get("limit", 5))
+                        resolved[name] = await self._semantic_search(
+                            user_id=user_id,
+                            query=query,
+                            top_k=top_k,
+                            thread_id=thread_id,
+                            shared_thread=shared_thread,
+                            channel=channel,
+                        )
+                elif kind == "direct_search":
+                    resolved[name] = await self._direct_search(
+                        request=req,
                         user_id=user_id,
-                        query=query,
-                        top_k=limit,
                         thread_id=thread_id,
                         shared_thread=shared_thread,
                         channel=channel,
                     )
-                    resolved[name] = results
-                    
-                    logger.info(
-                        "context.semantic_search.complete",
-                        trace_id=trace_id,
-                        name=name,
-                        duration_ms=int((asyncio.get_event_loop().time() - search_start) * 1000),
-                        results_count=len(results),
-                        top_result=results[0].get('content', '')[:50] if results else None
+                elif kind == "context_ref":
+                    ref = req.get("ref") or req.get("target")
+                    resolved[name] = self._resolve_context_ref(
+                        ref=ref,
+                        existing_context=existing_context,
+                        agent_state=agent_state,
                     )
-                
-                elif kind == 'direct_search':
-                    filters = req.get('filters', {})
-                    limit = req.get('limit', 20)
-                    # 确保 limit 是有效的整数，防止 int(None) 错误
-                    if limit is None or limit == '':
-                        limit = 20
-                    try:
-                        limit = int(limit)
-                    except (ValueError, TypeError):
-                        limit = 20
-                    filters['limit'] = limit
-                    
-                    scope = req.get('scope', 'family')  # context_request可以指定scope
-                    
-                    # 获取家庭上下文（用于person解析和全家查询）
-                    from src.services.household_service import household_service
-                    household_context = await household_service.get_context()
-                    family_user_ids = household_context.get('family_scope', {}).get('user_ids', [])
-                    
-                    # 根据scope决定user_id和是否添加thread_id
-                    context_user_id = user_id
-                    if scope == 'family':
-                        # 家庭范围：使用所有家庭user_ids，不限制thread_id
-                        if family_user_ids:
-                            context_user_id = family_user_ids
-                        # 不添加thread_id过滤
-                    elif scope == 'thread':
-                        # 线程范围：当前用户 + thread_id
-                        context_user_id = user_id
-                        if thread_id and 'thread_id' not in filters:
-                            filters['thread_id'] = thread_id
-                    elif scope == 'personal':
-                        # 个人范围：解析person字段
-                        person_key = req.get('person_key')
-                        person = req.get('person')
-                        person_identifier = person_key if person_key else person
-                        
-                        if person_identifier:
-                            resolved_id = self.ai_engine.tool_executor._resolve_person_to_user_id(
-                                person_identifier, user_id, household_context
-                            )
-                            if resolved_id:
-                                context_user_id = resolved_id
-                        # 不添加thread_id
-                    
-                    if shared_thread:
-                        filters['shared_thread'] = True
-                    
-                    logger.debug(
-                        "context.direct_search.starting",
-                        trace_id=trace_id,
-                        name=name,
-                        scope=scope,
-                        user_id_type='list' if isinstance(context_user_id, list) else 'single',
-                        filters=list(filters.keys())
-                    )
-                    
-                    search_start = asyncio.get_event_loop().time()
-                    results = await self.ai_engine._call_mcp_tool(
-                        'search',
-                        query=req.get('query', ''),
-                        filters=filters,
-                        user_id=context_user_id,
-                        trace_id=trace_id,
-                    )
-                    resolved[name] = results
-                    
-                    logger.info(
-                        "context.direct_search.complete",
-                        trace_id=trace_id,
-                        name=name,
-                        duration_ms=int((asyncio.get_event_loop().time() - search_start) * 1000),
-                        filters=filters,
-                        results_count=len(results) if isinstance(results, list) else 0
-                    )
-                
+                elif kind == "observation_ref":
+                    ref = req.get("ref")
+                    payload = agent_state.get_observation_by_ref(ref) if agent_state else None
+                    resolved[name] = payload or {}
                 else:
-                    logger.info("context_request.unsupported", kind=kind, name=name)
-                    
-            except Exception as exc:
-                logger.warning(
-                    "context_request.failed",
+                    logger.info("context.requests.unsupported", trace_id=trace_id, name=name, kind=kind)
+                    resolved[name] = []
+                logger.info(
+                    "context.requests.done",
                     trace_id=trace_id,
                     name=name,
                     kind=kind,
+                    duration_ms=int((asyncio.get_event_loop().time() - start) * 1000),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "context.requests.failed",
+                    trace_id=trace_id,
+                    name=name,
                     error=str(exc),
-                    duration_ms=int((asyncio.get_event_loop().time() - req_start) * 1000)
+                    duration_ms=int((asyncio.get_event_loop().time() - start) * 1000),
                 )
                 resolved[name] = []
-        
-        total_duration = int((asyncio.get_event_loop().time() - start_time) * 1000)
-        logger.info(
-            "context.requests.resolved",
-            trace_id=trace_id,
-            total_duration_ms=total_duration,
-            resolved_names=list(resolved.keys()),
-            resolved_counts={k: len(v) if isinstance(v, list) else 1 for k, v in resolved.items()}
-        )
-        
         return resolved
-    
+
+    def _resolve_context_ref(
+        self,
+        *,
+        ref: Optional[str],
+        existing_context: Optional[Dict[str, Any]],
+        agent_state: Optional[AgentState],
+    ) -> Any:
+        """
+        根据 manifest ref 提供完整上下文数据。
+
+        中文注释：ref 形如 `context:expense_category_config`，优先从已加载上下文中读取，
+        若缓存未命中则回退到 AgentState 保存的原始原件。
+        """
+        if not ref or not isinstance(ref, str):
+            return {}
+        if ":" in ref:
+            prefix, identifier = ref.split(":", 1)
+        else:
+            prefix, identifier = "context", ref
+        if prefix in {"context", "dynamic"}:
+            if existing_context and identifier in existing_context:
+                return existing_context[identifier]
+            if agent_state and identifier in agent_state.raw_context:
+                return agent_state.raw_context[identifier]
+            return {}
+        if prefix == "observation":
+            if agent_state:
+                payload = agent_state.get_observation_by_ref(ref)
+                return payload or {}
+            return {}
+        logger.debug("context.ref.unsupported", ref=ref)
+        return {}
+
+    def prepare_tool_context_update(
+        self,
+        *,
+        tool_name: str,
+        params: Dict[str, Any],
+        result: Any,
+    ) -> Dict[str, Any]:
+        """
+        将工具调用结果注入会话上下文。
+
+        中文注释：对于关键查询（财务、健康等），使用 lossless 视图保留完整数据，
+        避免模型基于截断内容进行推理。
+        """
+        if result is None:
+            return {}
+        if not isinstance(params, dict):
+            params = {}
+        timestamp = datetime.now(ZoneInfo(settings.DEFAULT_TIMEZONE)).isoformat()
+        update: Dict[str, Any] = {}
+
+        if tool_name == "search":
+            filters = params.get("filters") or {}
+            resource_type = filters.get("type")
+            payload = {
+                "fetched_at": timestamp,
+                "query": params.get("query"),
+                "filters": filters,
+                "source_tool": tool_name,
+                "data": result,
+            }
+            if resource_type:
+                update[resource_type] = payload
+            else:
+                scope = filters.get("scope") or params.get("scope") or "general"
+                query_text = (params.get("query") or "").strip() or "all"
+                key = f"search::{scope}::{query_text}"
+                update[key] = payload
+            return update
+
+        identifier = (
+            params.get("name")
+            or params.get("identifier")
+            or params.get("id")
+            or params.get("target")
+            or params.get("key")
+        )
+        key = f"{tool_name}::{identifier}" if identifier else f"{tool_name}_result"
+        update[key] = {
+            "fetched_at": timestamp,
+            "input": params,
+            "source_tool": tool_name,
+            "data": result,
+        }
+        return update
+
+    def build_plan_view(self, raw_context: Dict[str, Any], planning_round: int) -> Dict[str, Any]:
+        """中文注释：按照策略输出 LLM 可消费的上下文视图及 manifest。"""
+        trimmed_light = self._trim_light_context(raw_context.get("light_context", []))
+        household_summary, household_total = self._summarize_household(raw_context.get("household", {}))
+        dynamic_summary, dynamic_manifest = self._summarize_dynamic(raw_context, planning_round)
+        return {
+            "light_context": trimmed_light,
+            "household": household_summary,
+            "dynamic": dynamic_summary,
+            "manifest": {
+                "light_context_total": len(raw_context.get("light_context", [])),
+                "household_members_total": household_total,
+                **dynamic_manifest,
+            },
+        }
+
+    # ------------------------------------------------------------------
+    # 内部工具方法（上下文裁剪）
+    # ------------------------------------------------------------------
+
+    def _trim_light_context(self, memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """根据策略裁剪轻量记忆。"""
+        cfg = self.policy.light_context
+        limit = cfg["limit"]
+        char_limit = cfg["char_limit"]
+        result: List[Dict[str, Any]] = []
+        for item in (memories or [])[:limit]:
+            preview = item.get("content", "")
+            result.append(
+                {
+                    "content": self._safe_preview(preview, char_limit),
+                    "time": item.get("time"),
+                    "ai_understanding": item.get("ai_understanding", {}),
+                    "speaker": item.get("speaker"),
+                    "speaker_display": item.get("speaker_display"),
+                }
+            )
+        return result
+
+    def _summarize_household(self, household: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
+        """压缩家庭成员信息并返回总成员数。"""
+        cfg = self.policy.household
+        members = household.get("members", []) or []
+        summary: List[Dict[str, Any]] = []
+        for member in members[: cfg["members_limit"]]:
+            tags = list((member.get("profile") or {}).get("tags", []))
+            summary.append(
+                {
+                    "member_key": member.get("member_key"),
+                    "display_name": member.get("display_name"),
+                    "relationship": member.get("relationship"),
+                    "user_ids_count": len(member.get("user_ids", [])),
+                    "tags": tags[: cfg["tag_limit"]],
+                }
+            )
+        return {
+            "members": summary,
+            "family_scope_user_ids": household.get("family_scope", {}),
+        }, len(members)
+
+    def _summarize_dynamic(self, raw_context: Dict[str, Any], planning_round: int) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """根据 token 预算生成动态上下文视图。"""
+        dynamic_summary: Dict[str, Any] = {}
+        manifest_entries: List[Dict[str, Any]] = []
+        available_keys_set: set[str] = set()
+
+        for key in raw_context.keys():
+            if key in self._reserved_context_keys:
+                continue
+            if key.startswith("_"):
+                continue
+            available_keys_set.add(key)
+
+        for key in self.policy.known_dynamic_keys():
+            if key in self._reserved_context_keys or key.startswith("_"):
+                continue
+            available_keys_set.add(key)
+
+        ordered_keys = self.policy.sorted_dynamic_keys(list(available_keys_set))
+        token_budget = self._dynamic_token_budget(planning_round)
+        consumed_tokens = 0
+        skipped_keys: List[str] = []
+
+        for key in ordered_keys:
+            policy = self.policy.get_dynamic_policy(key)
+            value = raw_context.get(key)
+            if policy.mode == "lossless":
+                entry = self._build_lossless_entry(key, value, policy)
+                dynamic_summary[key] = entry["view"]
+                manifest_entries.append(entry["manifest"])
+                continue
+
+            if value is None:
+                skipped_keys.append(key)
+                manifest_entries.append(
+                    {
+                        "key": key,
+                        "mode": policy.mode,
+                        "skipped": True,
+                        "reason": "value_not_loaded",
+                    }
+                )
+                continue
+
+            summarized = self._summarize_value(value, policy)
+            estimated_tokens = ContextPolicy.estimate_tokens(summarized)
+            if consumed_tokens + estimated_tokens > token_budget:
+                skipped_keys.append(key)
+                manifest_entries.append(
+                    {
+                        "key": key,
+                        "mode": policy.mode,
+                        "estimated_tokens": estimated_tokens,
+                        "skipped": True,
+                        "reason": "token_budget_exceeded",
+                    }
+                )
+                continue
+
+            dynamic_summary[key] = {
+                "mode": policy.mode,
+                "data": summarized,
+            }
+            consumed_tokens += estimated_tokens
+            manifest_entries.append(
+                {
+                    "key": key,
+                    "mode": policy.mode,
+                    "estimated_tokens": estimated_tokens,
+                }
+            )
+
+        manifest = {
+            "available_dynamic_keys": ordered_keys,
+            "selected_dynamic_keys": list(dynamic_summary.keys()),
+            "skipped_dynamic_keys": skipped_keys,
+            "token_budget": token_budget,
+            "token_consumed": consumed_tokens,
+            "entries": manifest_entries,
+        }
+        return dynamic_summary, manifest
+
+    def _summarize_value(self, value: Any, policy: DynamicKeyPolicy, depth: int = 0) -> Any:
+        """递归裁剪列表/字典/字符串，兼顾深层次结构。"""
+        if value is None:
+            return None
+        item_limit = policy.item_limit or 5
+        char_limit = policy.char_limit or 200
+        if depth > 0:
+            item_limit = max(1, min(item_limit, 2))
+            char_limit = max(40, min(char_limit, 160))
+        if isinstance(value, list):
+            items = [self._summarize_value(item, policy, depth + 1) for item in value[:item_limit]]
+            if len(value) > item_limit:
+                items.append(f"... trimmed {len(value) - item_limit} items")
+            return items
+        if isinstance(value, dict):
+            summary: Dict[str, Any] = {}
+            for index, (k, v) in enumerate(value.items()):
+                if index >= item_limit:
+                    summary["__more__"] = f"... trimmed {len(value) - item_limit} keys"
+                    break
+                summary[k] = self._summarize_value(v, policy, depth + 1)
+            return summary
+        if isinstance(value, str):
+            return self._safe_preview(value, char_limit)
+        return value
+
+    def _build_lossless_entry(
+        self,
+        key: str,
+        value: Any,
+        policy: DynamicKeyPolicy,
+    ) -> Dict[str, Any]:
+        """构建 lossless 模式的视图与 manifest。"""
+        ref = f"context:{key}"
+        is_loaded = value is not None
+        preview = (
+            self._safe_preview(value, policy.preview_chars)
+            if is_loaded
+            else "[context not loaded]"
+        )
+        byte_size = self._estimate_bytes(value) if is_loaded else 0
+        manifest_entry = {
+            "key": key,
+            "mode": "lossless",
+            "ref": ref,
+            "bytes": byte_size,
+            "preview_len": len(preview),
+            "loaded": is_loaded,
+        }
+        view = {
+            "mode": "lossless",
+            "ref": ref,
+            "preview": preview,
+            "bytes": byte_size,
+            "loaded": is_loaded,
+        }
+        if is_loaded:
+            view["data"] = value
+        return {"view": view, "manifest": manifest_entry}
+
+    def _dynamic_token_budget(self, planning_round: int) -> int:
+        """根据轮次计算动态上下文可用 token 预算。"""
+        cfg = self.policy.budgets
+        base = cfg["base_token_budget"]
+        increment = cfg["per_round_increment"]
+        max_budget = cfg["max_token_budget"]
+        budget = base + (max(0, planning_round - 1) * increment)
+        return min(budget, max_budget)
+
+    @staticmethod
+    def _estimate_bytes(value: Any) -> int:
+        """估算对象序列化后的字节数。"""
+        try:
+            return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"))
+        except Exception:
+            return len(str(value).encode("utf-8"))
+
+    @staticmethod
+    def _safe_preview(text: Any, limit: int) -> str:
+        """安全截断字符串，避免超长字段进入提示词。"""
+        value = str(text)
+        return value if len(value) <= limit else f"{value[:limit]}..."
+
+    # ------------------------------------------------------------------
+    # 上下文检索实现
+    # ------------------------------------------------------------------
+
     async def _get_recent_memories(
-        self, 
-        user_id: str, 
+        self,
+        user_id: str,
         limit: int,
         thread_id: Optional[str],
         shared_thread: bool,
-        channel: Optional[str]
+        channel: Optional[str],
     ) -> List[Dict[str, Any]]:
-        """获取最近的交互记录"""
+        """调用 MCP `search` 工具拉取最近记忆，输出统一字段结构。"""
+        filters = {"limit": limit}
+        if thread_id:
+            filters["thread_id"] = thread_id
+            filters["type"] = "chat_turn"
+            if shared_thread:
+                filters["shared_thread"] = True
+            if channel:
+                filters["channel"] = channel
         try:
-            filters = {'limit': limit}
-            if thread_id:
-                filters['thread_id'] = thread_id
-                filters['type'] = 'chat_turn'
-                if shared_thread:
-                    filters['shared_thread'] = True
-                if channel:
-                    filters['channel'] = channel
-            
-            recent_memories = await self.ai_engine._call_mcp_tool(
-                'search',
-                query='',
+            memories = await self.ai_engine._call_mcp_tool(
+                "search",
+                query="",
                 user_id=user_id,
-                filters=filters
+                filters=filters,
             )
-            
-            # 格式化记忆
-            formatted_memories = []
-            for memory in recent_memories:
-                if isinstance(memory, dict) and not memory.get('_meta'):
-                    aiu = memory.get('ai_understanding', {})
-                    # 处理时间字段：优先使用occurred_at，备选created_at
-                    time_value = memory.get('occurred_at') or memory.get('created_at')
-                    formatted_memories.append({
-                        'content': memory.get('content', ''),
-                        'ai_understanding': aiu if isinstance(aiu, dict) else {},
-                        'time': time_value  # 现在会是时间戳或None（如果两个字段都为空）
-                    })
-            
-            return formatted_memories
-            
-        except Exception as e:
-            logger.error("get_recent_memories.failed", error=str(e))
+        except Exception as exc:
+            logger.error("context.memories.failed", error=str(exc))
             return []
-    
+        result: List[Dict[str, Any]] = []
+        for memory in memories or []:
+            if not isinstance(memory, dict):
+                continue
+            aiu = memory.get("ai_understanding", {})
+            time_value = memory.get("occurred_at") or memory.get("created_at")
+            speaker_value = (
+                memory.get("speaker")
+                or (memory.get("ai_data") or {}).get("speaker")
+                or memory.get("role")
+            )
+            speaker_display = (
+                memory.get("speaker_display")
+                or (memory.get("ai_data") or {}).get("speaker_display")
+                or speaker_value
+            )
+            result.append(
+                {
+                    "content": memory.get("content", ""),
+                    "ai_understanding": aiu if isinstance(aiu, dict) else {},
+                    "time": time_value,
+                    "speaker": speaker_value,
+                    "speaker_display": speaker_display,
+                }
+            )
+        return result
+
+    async def _get_thread_summary(self, user_id: str, thread_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """检索线程级工作记忆，返回最新的 scratchpad 数据。"""
+        if not thread_id:
+            return None
+        try:
+            filters = {
+                "thread_id": thread_id,
+                "type": "thread_summary",
+                "limit": 1,
+            }
+            records = await self.ai_engine._call_mcp_tool(
+                "search",
+                query="",
+                user_id=user_id,
+                filters=filters,
+            )
+            if not records or not isinstance(records, list):
+                return None
+            record = records[0]
+            ai_data = record.get("ai_data") or record.get("ai_understanding") or {}
+            summary = {
+                "thread_scratchpad": ai_data.get("thread_scratchpad"),
+                "structured_summary": ai_data.get("structured_summary"),
+                "conversation_focus": ai_data.get("conversation_focus"),
+                "updated_at": ai_data.get("updated_at") or record.get("occurred_at"),
+                "content": record.get("content"),
+            }
+            return summary
+        except Exception as exc:
+            logger.warning("context.thread_summary.failed", error=str(exc), thread_id=thread_id)
+            return None
+
     async def _semantic_search(
-        self, 
-        user_id: str, 
-        query: str, 
+        self,
+        user_id: str,
+        query: str,
         top_k: int,
         thread_id: Optional[str],
         shared_thread: bool,
-        channel: Optional[str]
+        channel: Optional[str],
     ) -> List[Dict[str, Any]]:
-        """语义搜索"""
-        if not query:
-            return []
-        
+        """执行语义检索，返回内容/理解标签/时间戳等关键字段。"""
+        filters = {"limit": top_k}
+        if thread_id:
+            filters["thread_id"] = thread_id
+        if shared_thread:
+            filters["shared_thread"] = True
+        if channel:
+            filters["channel"] = channel
+        query_embedding = None
         try:
-            filters = {'limit': top_k}
-            if thread_id:
-                filters['thread_id'] = thread_id
-            if shared_thread:
-                filters['shared_thread'] = True
-            if channel:
-                filters['channel'] = channel
-            
-            # 生成查询向量
+            embs = await self.ai_engine.llm.embed([query])
+            query_embedding = embs[0] if embs else None
+        except Exception:
             query_embedding = None
-            try:
-                embs = await self.ai_engine.llm.embed([query])
-                query_embedding = embs[0] if embs else None
-            except Exception:
-                pass
-            
+        try:
             results = await self.ai_engine._call_mcp_tool(
-                'search',
+                "search",
                 query=query,
                 user_id=user_id,
                 filters=filters,
-                query_embedding=query_embedding
+                query_embedding=query_embedding,
             )
-            
-            # 格式化结果
-            formatted = []
-            for r in results:
-                if isinstance(r, dict):
-                    formatted.append({
-                        'content': r.get('content', ''),
-                        'ai_understanding': r.get('ai_understanding', {}),
-                        'time': r.get('occurred_at', '')
-                    })
-            
-            return formatted
-            
-        except Exception as e:
-            logger.error("semantic_search.failed", error=str(e))
+        except Exception as exc:
+            logger.error("context.semantic.failed", error=str(exc))
             return []
+        formatted: List[Dict[str, Any]] = []
+        for item in results or []:
+            if isinstance(item, dict):
+                formatted.append(
+                    {
+                        "content": item.get("content", ""),
+                        "ai_understanding": item.get("ai_understanding", {}),
+                        "time": item.get("occurred_at"),
+                    }
+                )
+        return formatted
 
+    async def _direct_search(
+        self,
+        request: Dict[str, Any],
+        user_id: str,
+        thread_id: Optional[str],
+        shared_thread: bool,
+        channel: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """
+        根据请求执行 direct_search。
 
-class ToolExecutor:
-    """工具执行器 - 负责 MCP 工具调用和结果处理"""
-    
-    def __init__(self, ai_engine):
-        self.ai_engine = ai_engine
-        self.capability_analyzer = ToolCapabilityAnalyzer()
-        self.argument_processor = ToolArgumentProcessor()
-        self.execution_monitor = ToolExecutionMonitor()
-    
+        - scope 为 family 时使用家庭 user_id 集合。
+        - scope 为 personal 时解析成员标识映射到具体 user_id。
+        - 返回原始列表，供上层控制裁剪。
+        """
+        filters = request.get("filters", {}) or {}
+        limit = request.get("limit", 20)
+        try:
+            limit = int(limit)
+        except Exception:
+            limit = 20
+        filters["limit"] = limit
+        scope = request.get("scope", "family")
+        household_context = await household_service.get_context()
+        family_user_ids = household_context.get("family_scope", {}).get("user_ids", [])
+        context_user_id: Any = user_id
+        if scope == "family":
+            context_user_id = family_user_ids or user_id
+        elif scope == "thread":
+            context_user_id = user_id
+            if thread_id and "thread_id" not in filters:
+                filters["thread_id"] = thread_id
+        elif scope == "personal":
+            person_key = request.get("person_key")
+            identifier = person_key or request.get("person")
+            resolved = self._resolve_person_to_user_id(identifier, user_id, household_context)
+            context_user_id = resolved or user_id
+        if shared_thread:
+            filters["shared_thread"] = True
+        results = await self.ai_engine._call_mcp_tool(
+            "search",
+            query=request.get("query", ""),
+            user_id=context_user_id,
+            filters=filters,
+            trace_id=request.get("trace_id"),
+        )
+        return results if isinstance(results, list) else []
+
     def _resolve_person_to_user_id(
         self,
-        person_or_key: str,
+        person_or_key: Optional[str],
         current_user_id: str,
-        household_context: Dict[str, Any]
+        household_context: Dict[str, Any],
     ) -> Optional[str]:
-        """将AI识别的person解析为user_id（极简版本，无硬编码）
-        
-        设计理念：
-        - AI负责将"儿子"/"妻子"等人称代词解析为具体名字或member_key
-        - 引擎只负责简单查找，不做任何映射逻辑
-        - 完全数据驱动，新增成员无需改代码
-        
-        Args:
-            person_or_key: AI输出的person字段（应该是具体名字或member_key）
-            current_user_id: 当前用户ID
-            household_context: 家庭上下文
-        
-        Returns:
-            解析后的user_id，如果无法解析返回None
+        """
+        将 LLM 给出的人员标识解析为 user_id。
+
+        支持：
+        - 直接 member_key 命中。
+        - 成员 display_name 大小写不敏感匹配。
+        - 特殊值“我/我的”回退到当前用户。
         """
         if not person_or_key:
             return None
-        
-        person_stripped = person_or_key.strip()
-        
-        # 特殊情况："我" → 当前用户（这是唯一的硬编码，因为无法从household推断）
-        if person_stripped in ['我', '我的']:
+        candidate = person_or_key.strip()
+        if not candidate:
+            return None
+        if candidate in {"我", "我的"}:
             return current_user_id
-        
-        # 从household context中查找（数据驱动）
-        members = household_context.get('members', [])
-        members_index = household_context.get('members_index', {})
-        
-        # 1. 优先匹配member_key（最准确）
-        if person_stripped in members_index:
-            user_ids = members_index[person_stripped].get('user_ids', [])
+        members = household_context.get("members", [])
+        members_index = household_context.get("members_index", {})
+        if candidate in members_index:
+            user_ids = members_index[candidate].get("user_ids", [])
             return user_ids[0] if user_ids else None
-        
-        # 2. 匹配display_name（大小写不敏感）
-        person_lower = person_stripped.lower()
+        lower = candidate.lower()
         for member in members:
-            display_name = member.get('display_name', '')
-            if display_name.lower() == person_lower:
-                user_ids = member.get('user_ids', [])
+            display_name = member.get("display_name", "")
+            if display_name.lower() == lower:
+                user_ids = member.get("user_ids", [])
                 return user_ids[0] if user_ids else None
-        
-        # 3. 无法解析：返回None（AI应该输出更明确的标识）
-        logger.warning(
-            "person_resolution.failed",
-            person=person_or_key,
-            available_members=[m.get('display_name') for m in members]
-        )
+        logger.debug("context.person_resolution_failed", candidate=candidate)
         return None
-    
-    async def execute_tool_plan(
-        self,
-        steps: List[Dict[str, Any]],
-        understanding: Dict[str, Any],
-        user_id: str,
-        context: Optional[Dict[str, Any]],
-        trace_id: str,
-        context_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """执行工具计划"""
-        if not steps:
-            return {"actions_taken": []}
-        
-        try:
-            # 获取可用工具列表
-            available_tools = await self._get_available_tools()
-            
-            executed = {"actions_taken": []}
-            last_store_id = None
-            last_aggregate_result = None
-            
-            for step in steps:
-                if not isinstance(step, dict):
-                    continue
-                
-                tool_name = step.get('tool')
-                if not tool_name or tool_name not in available_tools:
-                    logger.warning("tool.not_available", tool=tool_name)
-                    continue
-                
-                # 处理工具参数
-                raw_args = step.get('args', {})
-                processed_args = await self._prepare_tool_arguments(
-                    tool_name=tool_name,
-                    raw_args=raw_args,
-                    understanding=understanding,
-                    user_id=user_id,
-                    context=context,
-                    context_data=context_data,
-                    trace_id=trace_id,
-                    last_store_id=last_store_id,
-                    last_aggregate_result=last_aggregate_result
-                )
-                
-                # 执行工具
-                start_time = time.perf_counter()
-                try:
-                    result = await self.ai_engine._call_mcp_tool(
-                        tool_name, 
-                        trace_id=trace_id, 
-                        **processed_args
-                    )
-                    
-                    duration_ms = int((time.perf_counter() - start_time) * 1000)
-                    self.execution_monitor.record_call(tool_name, duration_ms, True)
-                    
-                    executed['actions_taken'].append({
-                        'action': tool_name,
-                        'result': result
-                    })
-                    
-                    # 更新上下文数据
-                    context_data[f"result_{tool_name}"] = result
-                    
-                    # 处理特殊返回值
-                    last_store_id, last_aggregate_result = self._update_execution_state(
-                        tool_name, result, last_store_id, last_aggregate_result
-                    )
-                    
-                except Exception as e:
-                    duration_ms = int((time.perf_counter() - start_time) * 1000)
-                    self.execution_monitor.record_call(tool_name, duration_ms, False)
-                    
-                    logger.error(
-                        "tool.execution.failed",
-                        tool=tool_name,
-                        trace_id=trace_id,
-                        error=str(e)
-                    )
-                    
-                    executed['actions_taken'].append({
-                        'action': tool_name,
-                        'result': {'success': False, 'error': str(e)}
-                    })
-            
-            return executed
-            
-        except Exception as e:
-            raise ToolExecutionError(
-                f"工具执行失败: {str(e)}",
-                trace_id=trace_id,
-                context={"steps_count": len(steps)},
-                cause=e
-            )
-    
-    async def _get_available_tools(self) -> set:
-        """获取可用工具集合"""
-        try:
-            tool_names = await self.capability_analyzer.get_tool_names(
-                self.ai_engine._http_client,
-                self.ai_engine.mcp_url
-            )
-            return set(tool_names)
-        except Exception:
-            # 回退工具列表
-            return {
-                "store", "search", "aggregate", "schedule_reminder",
-                "get_pending_reminders", "mark_reminder_sent",
-                "update_memory_fields", "render_chart", "batch_store",
-                "batch_search", "soft_delete", "reembed_memories"
-            }
-    
-    async def _prepare_tool_arguments(
-        self,
-        tool_name: str,
-        raw_args: Dict[str, Any],
-        understanding: Dict[str, Any],
-        user_id: str,
-        context: Optional[Dict[str, Any]],
-        context_data: Dict[str, Any],
-        trace_id: str,
-        last_store_id: Optional[str],
-        last_aggregate_result: Optional[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """准备工具调用参数"""
-        # 解析上下文引用
-        args = self.argument_processor.resolve_args_with_context(
-            raw_args,
-            context_data=context_data,
-            last_store_id=last_store_id,
-            last_aggregate_result=last_aggregate_result
-        )
-        
-        # 方案B4：基于AI识别的scope智能处理user_id和thread_id
-        # 核心理念：默认全家范围，AI明确指定时才按人或线程过滤
-        if tool_name in ['search', 'aggregate'] and 'user_id' not in args:
-            # 获取家庭上下文
-            household_scope = context_data.get('household', {}).get('family_scope', {})
-            all_family_user_ids = household_scope.get('user_ids', [])
-            household_context = context_data.get('household', {})
-            
-            # 从AI的understanding中获取scope和person
-            scope = understanding.get('entities', {}).get('scope', 'family')
-            person = understanding.get('entities', {}).get('person')
-            
-            if scope == 'family':
-                # 家庭范围（默认）：所有家庭成员，不限thread_id
-                if all_family_user_ids:
-                    args['user_id'] = all_family_user_ids
-                else:
-                    args['user_id'] = user_id
-                # 不添加thread_id过滤（家庭数据跨线程共享）
-                
-                logger.debug(
-                    "tool_args.scope_family",
-                    trace_id=trace_id,
-                    tool=tool_name,
-                    family_count=len(all_family_user_ids) if isinstance(all_family_user_ids, list) else 1
-                )
-                
-            elif scope == 'thread':
-                # 线程范围：当前用户 + 限制thread_id
-                args['user_id'] = user_id
-                # 自动添加thread_id（如果工具参数中没有明确指定）
-                if 'filters' in args and thread_id and 'thread_id' not in args.get('filters', {}):
-                    if 'filters' not in args:
-                        args['filters'] = {}
-                    args['filters']['thread_id'] = thread_id
-                
-                logger.debug(
-                    "tool_args.scope_thread",
-                    trace_id=trace_id,
-                    tool=tool_name,
-                    user_id=user_id,
-                    thread_id=thread_id
-                )
-                
-            elif scope == 'personal':
-                # 个人范围：解析person为具体user_id
-                # 优先使用person_key（member_key），其次使用person（display_name）
-                person_key = understanding.get('entities', {}).get('person_key')
-                person_identifier = person_key if person_key else person
-                
-                resolved_user_id = None
-                if person_identifier:
-                    resolved_user_id = self._resolve_person_to_user_id(
-                        person_identifier, user_id, household_context
-                    )
-                
-                if resolved_user_id:
-                    args['user_id'] = resolved_user_id
-                else:
-                    # 解析失败，回退到当前用户
-                    args['user_id'] = user_id
-                    logger.warning(
-                        "tool_args.person_resolution_failed",
-                        trace_id=trace_id,
-                        person_key=person_key,
-                        person=person,
-                        fallback_to_current_user=True
-                    )
-                
-                logger.debug(
-                    "tool_args.scope_personal",
-                    trace_id=trace_id,
-                    tool=tool_name,
-                    person_key=person_key,
-                    person=person,
-                    resolved_user_id=args['user_id']
-                )
-            
-            else:
-                # 未识别的scope，回退到family
-                args['user_id'] = all_family_user_ids if all_family_user_ids else user_id
-                logger.warning(
-                    "tool_args.unknown_scope",
-                    trace_id=trace_id,
-                    scope=scope,
-                    fallback='family'
-                )
-        
-        # 自动添加 user_id（如果工具需要）
-        if await self.capability_analyzer.requires_user_id(
-            tool_name, self.ai_engine._http_client, self.ai_engine.mcp_url
-        ) and 'user_id' not in args:
-            args['user_id'] = await self._resolve_user_id(user_id, context)
-        
-        # 自动添加向量嵌入（如果工具支持）
-        if await self.capability_analyzer.supports_embedding(
-            tool_name, self.ai_engine._http_client, self.ai_engine.mcp_url
-        ):
-            if 'content' in args and 'embedding' not in args:
-                text_for_embed = args.get('content') or understanding.get('original_content', '')
-                if text_for_embed:
-                    args['embedding'] = await self.ai_engine._get_embedding_cached(text_for_embed, trace_id)
-            
-            if 'query' in args and 'query_embedding' not in args:
-                query_text = args.get('query')
-                if query_text:
-                    args['query_embedding'] = await self.ai_engine._get_embedding_cached(query_text, trace_id)
-        
-        # 仅为存储类工具合并实体信息到 ai_data（保持AI自主决策）
-        output_type = await self.capability_analyzer.get_output_type(
-            tool_name, self.ai_engine._http_client, self.ai_engine.mcp_url
-        )
-        if output_type == 'entity_with_id':
-            # 确保存储工具总是有必需的参数
-            if 'content' not in args:
-                # 使用原始内容作为 fallback
-                args['content'] = understanding.get('original_content', '')
-            
-            # 确保存储工具总是有 ai_data 参数
-            ai_data = args.get('ai_data', {})
-            entities = understanding.get('entities', {})
-            merged = {**entities, **ai_data}
-            merged.setdefault('occurred_at', understanding.get('occurred_at') or datetime.now().isoformat())
-            if context and context.get('thread_id'):
-                merged.setdefault('thread_id', context.get('thread_id'))
-            merged.setdefault('trace_id', trace_id)
-            args['ai_data'] = merged
-        
-        return args
-    
-    async def _resolve_user_id(self, user_id: str, context: Optional[Dict[str, Any]]) -> str:
-        """解析用户ID（简化版本）"""
-        # 这里可以实现用户ID的映射逻辑
-        # 当前简化为直接返回
-        return user_id
-    
-    def _update_execution_state(
-        self,
-        tool_name: str,
-        result: Any,
-        last_store_id: Optional[str],
-        last_aggregate_result: Optional[Dict[str, Any]]
-    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
-        """更新执行状态（用于后续工具引用）"""
-        new_store_id = last_store_id
-        new_aggregate_result = last_aggregate_result
-        
-        if isinstance(result, dict):
-            if result.get('success') and result.get('id'):
-                new_store_id = result['id']
-            
-            if tool_name == 'aggregate' or 'result' in result or 'groups' in result:
-                new_aggregate_result = result
-        
-        return new_store_id, new_aggregate_result
-    
-    async def is_simple_operation(self, steps: List[Dict[str, Any]]) -> bool:
-        """判断是否为简单操作"""
-        return await self.capability_analyzer.is_simple_operation(
-            steps, self.ai_engine._http_client, self.ai_engine.mcp_url
-        )
+
+
+# -----------------------------------------------------------------------------
+# 主引擎
+# -----------------------------------------------------------------------------
 
 
 class AIEngineV2:
-    """AI 引擎核心类 V2 - 重构版本
-    
-    设计原则：
-    - 让 AI 决定一切业务逻辑
-    - 工程层只提供基础能力（LLM调用、工具执行、数据存储）
-    - 通过 Prompt 和数据驱动系统演进
     """
-    
-    def __init__(self):
-        # 核心组件
+    FAA 核心引擎，负责驱动统一的 Plan→Act→Observe 循环。
+
+    关键特性：
+    - 单循环：LLM 在一次循环中完成计划、执行、反思，直到主动终止。
+    - 数据驱动：上下文、工具调用、回复均通过 Prompt 契约自描述，工程层无业务逻辑。
+    - 可观测：每一轮的上下文状态、计划、执行结果都会写入结构化日志。
+    """
+
+    def __init__(self) -> None:
+        """初始化核心依赖（LLM、上下文管理器、缓存等）。"""
         self.llm = LLMClient()
         self.mcp_client = None
-        self.mcp_url = os.getenv('MCP_SERVER_URL', 'http://faa-mcp:8000')
-        
-        # HTTP 客户端（复用连接）
+        self.mcp_url = os.getenv("MCP_SERVER_URL", "http://faa-mcp:8000")
         self._http_client: Optional[httpx.AsyncClient] = None
-        
-        # 辅助组件
+
         self.message_processor = MessageProcessor()
         self.context_manager = ContextManager(self)
-        self.tool_executor = ToolExecutor(self)
-        
-        # 向量嵌入缓存（两级缓存优化性能）
+
+        self._tool_calls_by_trace: Dict[str, List[Dict[str, Any]]] = {}
         self._emb_cache_by_trace: Dict[str, Dict[str, List[float]]] = {}
         self._emb_cache_global: Dict[str, Tuple[List[float], float]] = {}
         self._emb_cache_global_max_items = 1000
         self._emb_cache_global_ttl = 3600.0
-        
-        # 工具调用记录（按 trace_id 聚合）
-        self._tool_calls_by_trace: Dict[str, List[Dict[str, Any]]] = {}
-    
-    # =================== 主入口方法 ===================
-    
-    async def process_message(self, content: str, user_id: str, context: Dict[str, Any] = None) -> str:
-        """处理用户消息的主入口 - AI驱动的统一流程
-        
-        核心理念：让AI决定一切，工程只提供执行框架
-        流程：理解 → 规划 → 执行 → 响应
-        
-        Args:
-            content: 用户输入的消息内容
-            user_id: 用户标识
-            context: 上下文信息（渠道、线程、附件等）
-            
-        Returns:
-            AI 生成的回复文本
+
+        self.agent_max_turns = getattr(settings, "AGENT_MAX_TURNS", 3)
+
+    async def process_message(self, content: str, user_id: str, context: Optional[Dict[str, Any]] = None) -> str:
+        """
+        主入口：处理用户消息。
+
+        步骤：
+        1. 预处理消息并记录日志。
+        2. 初始化 `AgentState` 与基础上下文。
+        3. 运行 Plan→Act 循环获取最终响应。
+        4. 按需写入记忆并记录实验数据。
         """
         trace_id = str(uuid.uuid4())
         start_time = asyncio.get_event_loop().time()
-        
         try:
-            # 初始化追踪
             self._init_trace(trace_id, user_id, context)
-            
-            # 步骤1：消息预处理（合并附件文本）
-            step1_start = asyncio.get_event_loop().time()
             processed_content = await self._preprocess_message(content, context)
             logger.info(
-                "step1.preprocess.completed",
+                "agent.step.preprocess",
                 trace_id=trace_id,
-                original_length=len(content or ''),
+                original_length=len(content or ""),
                 processed_length=len(processed_content),
-                has_attachments=bool(context and context.get('attachments')),
-                duration_ms=int((asyncio.get_event_loop().time() - step1_start) * 1000)
+                has_attachments=bool(context and context.get("attachments")),
             )
-            
-            # 步骤2：获取实验版本（A/B 测试）
+
             prompt_version = self._get_experiment_version(user_id, context)
-            logger.debug("step2.experiment.version", trace_id=trace_id, version=prompt_version)
-            
-            # 步骤3：AI 理解分析（核心）
-            step3_start = asyncio.get_event_loop().time()
-            analysis = await self._analyze_message(processed_content, user_id, context, trace_id, prompt_version)
+            logger.debug("agent.prompt_version", trace_id=trace_id, version=prompt_version)
+
+            thread_id = (context or {}).get("thread_id")
+            channel = (context or {}).get("channel")
+            shared_thread = bool((context or {}).get("shared_thread"))
+
+            state = AgentState(
+                user_id=user_id,
+                thread_id=thread_id,
+                channel=channel,
+                trace_id=trace_id,
+                user_message=processed_content,
+            )
+
+            base_context = await self.context_manager.get_basic_context(
+                user_id=user_id,
+                thread_id=thread_id,
+                shared_thread=shared_thread,
+                channel=channel,
+            )
+            state.raw_context.update(base_context)
+            request_meta = self._build_request_meta(
+                state=state,
+                base_context=base_context,
+                incoming_context=context,
+                prompt_version=prompt_version,
+            )
+            if request_meta:
+                state.raw_context["request_meta"] = request_meta
+
+            final_response = await self._run_agent_loop(
+                state=state,
+                context=context,
+                prompt_version=prompt_version,
+            )
+
+            reply_text = final_response.reply.strip() if final_response.reply else "抱歉，我需要更多时间来处理。"
+            await self._store_conversation_turn(
+                user_id=user_id,
+                thread_id=thread_id,
+                trace_id=trace_id,
+                user_message=processed_content,
+                assistant_message=reply_text,
+                memory_record=final_response.memory_record,
+                context=context,
+            )
+
+            self._record_experiment_result(
+                user_id=user_id,
+                context=context,
+                trace_id=trace_id,
+                state=state,
+                final_response=final_response,
+            )
+
             logger.info(
-                "step3.analysis.completed",
+                "agent.process.completed",
                 trace_id=trace_id,
-                intent=analysis.understanding.intent,
-                need_clarification=analysis.understanding.need_clarification,
-                need_action=analysis.understanding.need_action,
-                context_requests_count=len(analysis.context_requests),
-                tool_steps_count=len(analysis.tool_plan.steps),
-                duration_ms=int((asyncio.get_event_loop().time() - step3_start) * 1000)
+                total_duration_ms=int((asyncio.get_event_loop().time() - start_time) * 1000),
+                steps=state.step_count,
+                status=final_response.status,
             )
-            
-            # 步骤4：处理澄清分支
-            if analysis.understanding.need_clarification:
-                clarification_response = await self._handle_clarification(analysis, context, prompt_version)
-                logger.info(
-                    "step4.clarification.returned",
-                    trace_id=trace_id,
-                    response_length=len(clarification_response),
-                    total_duration_ms=int((asyncio.get_event_loop().time() - start_time) * 1000)
-                )
-                return clarification_response
-            
-            # 步骤5：执行工具并生成响应
-            step5_start = asyncio.get_event_loop().time()
-            response = await self._execute_and_respond(analysis, processed_content, user_id, context, trace_id, prompt_version)
-            logger.info(
-                "step5.execution.completed",
-                trace_id=trace_id,
-                response_length=len(response),
-                duration_ms=int((asyncio.get_event_loop().time() - step5_start) * 1000),
-                total_duration_ms=int((asyncio.get_event_loop().time() - start_time) * 1000)
-            )
-            
-            # 步骤6：记录实验结果（如果在实验中）
-            self._record_experiment_result(user_id, context, trace_id, analysis, response)
-            
-            return response
-            
-        except Exception as e:
-            error_response = await self._handle_error(e, trace_id, user_id)
-            logger.error(
-                "process.failed",
-                trace_id=trace_id,
-                total_duration_ms=int((asyncio.get_event_loop().time() - start_time) * 1000)
-            )
+            return reply_text
+        except Exception as exc:
+            logger.exception("agent.process.failed", trace_id=trace_id, error=str(exc))
+            error_response = await self._handle_error(exc, trace_id, user_id)
             return error_response
         finally:
             self._cleanup_trace(trace_id)
-    
-    # =================== 核心步骤方法 ===================
-    
-    def _init_trace(self, trace_id: str, user_id: str, context: Optional[Dict[str, Any]]):
-        """初始化请求追踪 - 记录消息接收的起点"""
-        thread_id = (context or {}).get('thread_id')
-        channel = (context or {}).get('channel')
-        
-        # 提取消息预览（前50字符）用于日志
-        content_preview = (context or {}).get('content', '')[:50]
-        if len((context or {}).get('content', '')) > 50:
-            content_preview += '...'
-        
+
+    async def _run_agent_loop(
+        self,
+        *,
+        state: AgentState,
+        context: Optional[Dict[str, Any]],
+        prompt_version: str,
+    ) -> AgentFinalResponseModel:
+        """
+        驱动单轮 Plan→Act→Observe 循环。
+
+        - 每轮根据 `context_round` 生成预算化上下文。
+        - 调用 LLM 获取行动计划并解析为 `AgentActionModel`。
+        - 执行动作、记录 observation，并根据 stop/terminate 决定是否退出循环。
+        - 若耗尽回合仍未终止，则以 `max_turns` 状态结束。
+        """
+        max_turns = max(1, self.agent_max_turns)
+        for turn_index in range(max_turns):
+            state.context_round += 1
+            # 中文注释：为每轮记录耗时与关键事件，帮助定位性能瓶颈
+            turn_metrics: Dict[str, Any] = {
+                "turn": turn_index + 1,
+                "context_round": state.context_round,
+            }
+            context_start = time.perf_counter()
+            plan_view = self.context_manager.build_plan_view(state.raw_context, state.context_round)
+            turn_metrics["context_build_ms"] = int((time.perf_counter() - context_start) * 1000)
+            manifest = plan_view.get("manifest", {})
+            logger.debug(
+                "agent.loop.context_snapshot",
+                trace_id=state.trace_id,
+                turn=turn_index + 1,
+                context_round=state.context_round,
+                light=len(plan_view.get("light_context", [])),
+                household_members=manifest.get("household_members_total"),
+                dynamic_selected=manifest.get("selected_dynamic_keys"),
+            )
+            turn_metrics["dynamic_selected"] = manifest.get("selected_dynamic_keys")
+            planning_payload = state.build_planning_payload(context_view=plan_view, max_turns=max_turns)
+            planning_prompt = await prompt_manager.get_planning_prompt_with_tools(prompt_version)
+            system_prompt = await prompt_manager.get_system_prompt_with_tools(prompt_version)
+
+            user_prompt = "\n\n".join(
+                [
+                    planning_prompt,
+                    "输入数据：",
+                    json.dumps(planning_payload, ensure_ascii=False, default=str),
+                    "请严格按照契约输出 JSON。",
+                ]
+            )
+
+            logger.info(
+                "agent.loop.request",
+                trace_id=state.trace_id,
+                turn=turn_index + 1,
+                remaining=planning_payload["meta"]["remaining_turns"],
+            )
+
+            try:
+                llm_start = time.perf_counter()
+                raw_plan = await self.llm.chat_json(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=0.2,
+                    max_tokens=800,
+                )
+                turn_metrics["planning_llm_ms"] = int((time.perf_counter() - llm_start) * 1000)
+            except Exception as exc:
+                logger.error("agent.loop.llm_failed", trace_id=state.trace_id, error=str(exc))
+                turn_metrics["llm_error"] = str(exc)
+                state.metadata.setdefault("timings", []).append(turn_metrics)
+                return await self._generate_final_output(
+                    state=state,
+                    context=context,
+                    prompt_version=prompt_version,
+                    status="llm_plan_error",
+                    reason=str(exc),
+                )
+
+            try:
+                action = AgentActionModel(**raw_plan)
+                turn_metrics["planned_action"] = action.action
+                logger.info(
+                    "agent.loop.plan_parsed",
+                    trace_id=state.trace_id,
+                    turn=turn_index + 1,
+                    action=action.action,
+                    tool=action.tool,
+                    expected_outcome=action.expected_outcome,
+                    stop=action.stop,
+                )
+            except ValidationError as exc:
+                logger.error("agent.loop.plan_validation_failed", trace_id=state.trace_id, error=str(exc), raw=raw_plan)
+                logger.error(f"raw_plan: {raw_plan}")
+                observation = {
+                    "success": False,
+                    "summary": "计划解析失败，进入回退流程",
+                    "type": "system",
+                    "error": str(exc),
+                }
+                fallback_action = AgentActionModel(action="no_op", thought="计划解析失败", input={})
+                state.add_step(fallback_action, observation)
+                turn_metrics["planned_action"] = "validation_error"
+                turn_metrics["validation_error"] = str(exc)
+                state.metadata.setdefault("timings", []).append(turn_metrics)
+                return await self._generate_final_output(
+                    state=state,
+                    context=context,
+                    prompt_version=prompt_version,
+                    status="invalid_plan",
+                    reason=str(exc),
+                )
+
+            observation = await self._execute_action(
+                action=action,
+                state=state,
+                context=context,
+                prompt_version=prompt_version,
+            )
+            state.add_step(action, observation)
+            logger.debug(
+                "agent.loop.observation_recorded",
+                trace_id=state.trace_id,
+                turn=turn_index + 1,
+                success=observation.get("success"),
+                summary=observation.get("summary"),
+                obs_type=observation.get("type"),
+                terminate=observation.get("terminate"),
+            )
+            turn_metrics["observation_type"] = observation.get("type")
+            turn_metrics["observation_success"] = bool(observation.get("success"))
+            turn_metrics["terminate_flag"] = bool(observation.get("terminate"))
+
+            if observation.get("update_context"):
+                updated = observation.get("update_context")
+                if isinstance(updated, dict):
+                    for key, value in updated.items():
+                        if value is not None:
+                            state.raw_context[key] = value
+            if observation.get("data"):
+                turn_metrics["observation_has_data"] = True
+
+            state.metadata.setdefault("timings", []).append(turn_metrics)
+
+            inline_final = state.metadata.get("inline_final")
+            if inline_final:
+                turn_metrics["inline_final"] = True
+                final_payload = state.metadata.pop("inline_final")
+                logger.info(
+                    "agent.loop.inline_final",
+                    trace_id=state.trace_id,
+                    turn=turn_index + 1,
+                    action=action.action,
+                )
+                return AgentFinalResponseModel(
+                    reply=final_payload.get("reply") or "（缺少最终回复）",
+                    memory_record=final_payload.get("memory_record") or {},
+                    followups=final_payload.get("followups") or [],
+                    status=final_payload.get("status") or "success",
+                )
+
+            if action.stop or action.action in {"respond", "finalize"}:
+                logger.info("agent.loop.stop_signal", trace_id=state.trace_id, turn=turn_index + 1)
+                return await self._generate_final_output(
+                    state=state,
+                    context=context,
+                    prompt_version=prompt_version,
+                    status="completed",
+                    reason="agent_stop",
+                )
+
+            if observation.get("terminate"):
+                logger.info(
+                    "agent.loop.terminate_flag",
+                    trace_id=state.trace_id,
+                    turn=turn_index + 1,
+                    reason=observation.get("summary"),
+                )
+                return await self._generate_final_output(
+                    state=state,
+                    context=context,
+                    prompt_version=prompt_version,
+                    status="terminated",
+                    reason=observation.get("summary"),
+                )
+
+        logger.warning("agent.loop.max_turns_reached", trace_id=state.trace_id)
+        return await self._generate_final_output(
+            state=state,
+            context=context,
+            prompt_version=prompt_version,
+            status="max_turns",
+            reason="Reached maximum agent turns",
+        )
+
+    async def _execute_action(
+        self,
+        *,
+        action: AgentActionModel,
+        state: AgentState,
+        context: Optional[Dict[str, Any]],
+        prompt_version: str,
+    ) -> Dict[str, Any]:
+        """
+        执行单个行动并返回观测结果。
+
+        支持：
+        - `call_tool`：调用 MCP 工具并记录成功 / 失败。
+        - `fetch_context`：解析上下文请求并更新 `state.raw_context`。
+        - `respond` / `finalize` / `clarify`：控制型动作，指示循环退出或提问。
+        - 未知动作会直接返回错误并触发终止，防止状态机失控。
+        """
+        trace_id = state.trace_id
+        normalized_input = action.normalized_input()
+
+        if action.action == "call_tool":
+            tool_name = action.tool or normalized_input.get("tool") or action.metadata.get("tool")
+            if not tool_name:
+                summary = "缺少工具名称，无法执行调用"
+                logger.warning("agent.tool.missing_name", trace_id=trace_id)
+                return {"success": False, "summary": summary, "type": "tool", "error": "missing_tool_name"}
+            params = normalized_input.get("args") if isinstance(normalized_input.get("args"), dict) else normalized_input
+            params = dict(params or {})
+            try:
+                result = await self._call_mcp_tool(tool_name, trace_id=trace_id, **params)
+                summary = self._summarize_tool_result(tool_name, result)
+                logger.info("agent.tool.success", trace_id=trace_id, tool=tool_name)
+                context_update = self.context_manager.prepare_tool_context_update(
+                    tool_name=tool_name,
+                    params=params,
+                    result=result,
+                )
+                return {
+                    "success": True,
+                    "summary": summary,
+                    "type": "tool",
+                    "tool": tool_name,
+                    "data": result,
+                    "update_context": context_update or None,
+                }
+            except Exception as exc:
+                logger.error("agent.tool.failed", trace_id=trace_id, tool=tool_name, error=str(exc))
+                return {
+                    "success": False,
+                    "summary": f"工具 {tool_name} 调用失败: {exc}",
+                    "type": "tool",
+                    "tool": tool_name,
+                    "error": str(exc),
+                }
+
+        if action.action == "fetch_context":
+            requests = []
+            if "requests" in normalized_input and isinstance(normalized_input["requests"], list):
+                requests = normalized_input["requests"]
+            elif isinstance(action.input, list):
+                requests = action.input
+            else:
+                requests = [normalized_input]
+            try:
+                extra_context = await self.context_manager.resolve_context_requests(
+                    context_requests=requests,
+                    understanding={"original_content": state.original_user_message},
+                    user_id=state.user_id,
+                    thread_id=state.thread_id,
+                    shared_thread=bool((context or {}).get("shared_thread")),
+                    channel=state.channel,
+                    trace_id=trace_id,
+                    existing_context=state.raw_context,
+                    agent_state=state,
+                )
+                summary = f"Fetched context keys: {list(extra_context.keys())}"
+                logger.info("agent.context.fetched", trace_id=trace_id, keys=list(extra_context.keys()))
+                return {
+                    "success": True,
+                    "summary": summary,
+                    "type": "context",
+                    "data": extra_context,
+                    "update_context": extra_context,
+                }
+            except Exception as exc:
+                logger.error("agent.context.failed", trace_id=trace_id, error=str(exc))
+                return {
+                    "success": False,
+                    "summary": f"获取上下文失败: {exc}",
+                    "type": "context",
+                    "error": str(exc),
+                    "terminate": True,
+                }
+
+        if action.action in {"respond", "finalize"}:
+            inline_reply = normalized_input.get("reply") or action.metadata.get("reply")
+            inline_memory = normalized_input.get("memory_record") or action.metadata.get("memory_record")
+            inline_followups = normalized_input.get("followups") or action.metadata.get("followups")
+            inline_status = normalized_input.get("status") or action.metadata.get("status") or "success"
+            inline_data = None
+            summary = "LLM 请求立即生成最终回复"
+            if inline_reply:
+                summary = "Inline final reply ready"
+                inline_data = {
+                    "inline_reply": inline_reply,
+                    "memory_record": inline_memory,
+                    "followups": inline_followups,
+                    "status": inline_status,
+                }
+                state.metadata["inline_final"] = {
+                    "reply": inline_reply,
+                    "memory_record": inline_memory or {},
+                    "followups": inline_followups or [],
+                    "status": inline_status,
+                }
+            logger.info("agent.control.respond", trace_id=trace_id, inline=bool(inline_reply))
+            observation_payload = {
+                "success": True,
+                "summary": summary,
+                "type": "control",
+                "terminate": True,
+            }
+            if inline_data:
+                observation_payload["data"] = inline_data
+            return observation_payload
+
+        if action.action == "clarify":
+            question = normalized_input.get("question") or action.metadata.get("question")
+            summary = question or "需要澄清信息"
+            return {
+                "success": True,
+                "summary": summary,
+                "type": "clarify",
+                "terminate": True,
+            }
+
+        logger.warning("agent.action.unknown", trace_id=trace_id, action=action.action)
+        return {
+            "success": False,
+            "summary": f"未知的行动类型: {action.action}",
+            "type": "system",
+            "error": "unknown_action",
+            "terminate": True,
+        }
+
+    async def _generate_final_output(
+        self,
+        *,
+        state: AgentState,
+        context: Optional[Dict[str, Any]],
+        prompt_version: str,
+        status: str,
+        reason: Optional[str],
+    ) -> AgentFinalResponseModel:
+        """
+        调用 LLM 生成最终回复。
+
+        - 组装 `state.build_final_payload` 返回的上下文。
+        - 调用响应 prompt 输出契约 JSON。
+        - 若解析失败，降级到固定的兜底文本。
+        """
+        plan_view = self.context_manager.build_plan_view(state.raw_context, max(1, state.context_round))
+        payload = state.build_final_payload(context_view=plan_view, status=status, reason=reason)
+        response_prompt = prompt_manager.get_response_prompt(prompt_version)
+        system_prompt = await prompt_manager.get_system_prompt_with_tools(prompt_version)
+        user_prompt = "\n\n".join(
+            [
+                response_prompt,
+                "输入：",
+                json.dumps(payload, ensure_ascii=False, default=str),
+                "请返回契约 JSON。",
+            ]
+        )
+        logger.info(
+            "agent.final.request",
+            trace_id=state.trace_id,
+            status=status,
+            reason=reason,
+            steps=len(state.steps),
+        )
+        try:
+            final_result = await self.llm.chat_json(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=0.3,
+                max_tokens=900,
+            )
+            try:
+                model = AgentFinalResponseModel(**final_result)
+                model.status = status or model.status
+                logger.info(
+                    "agent.final.success",
+                    trace_id=state.trace_id,
+                    reply_length=len(model.reply or ""),
+                    status=model.status,
+                    followups=len(model.followups),
+                    should_store=model.memory_record.get("should_store", True),
+                )
+                return model
+            except ValidationError as exc:
+                logger.error("agent.final.validation_failed", trace_id=state.trace_id, error=str(exc), raw=final_result)
+        except Exception as exc:
+            logger.error("agent.final.llm_failed", trace_id=state.trace_id, error=str(exc))
+        # 中文注释：回退策略，确保用户始终收到回复
+        fallback_text = "抱歉，我暂时无法完整处理该请求，但已经记录您的需求，会尽快完善。"
+        return AgentFinalResponseModel(reply=fallback_text, status="error", memory_record={})
+
+    def _summarize_tool_result(self, tool_name: str, result: Any) -> str:
+        """将工具返回值压缩为可读摘要，便于写入日志或步骤记录。"""
+        if isinstance(result, dict):
+            preview = json.dumps(result, ensure_ascii=False, default=str)
+        elif isinstance(result, list):
+            preview = json.dumps(result[:3], ensure_ascii=False, default=str)
+        else:
+            preview = str(result)
+        if len(preview) > 240:
+            preview = f"{preview[:240]}..."
+        return f"{tool_name} 完成，返回：{preview}"
+
+    # ------------------------------------------------------------------
+    # 基础设施：Trace、错误、缓存
+    # ------------------------------------------------------------------
+
+    def _init_trace(self, trace_id: str, user_id: str, context: Optional[Dict[str, Any]]) -> None:
+        """初始化追踪信息并准备 per-trace 缓存。"""
+        thread_id = (context or {}).get("thread_id")
+        channel = (context or {}).get("channel")
+        preview = (context or {}).get("content", "")[:50]
         logger.info(
             "message.received",
             trace_id=trace_id,
             user_id=user_id,
             thread_id=thread_id,
             channel=channel,
-            content_preview=content_preview,
-            has_attachments=bool(context and context.get('attachments'))
+            preview=preview,
+            has_attachments=bool(context and context.get("attachments")),
         )
-        
         self._tool_calls_by_trace[trace_id] = []
         self._emb_cache_by_trace[trace_id] = {}
-    
+
     async def _preprocess_message(self, content: str, context: Optional[Dict[str, Any]]) -> str:
-        """消息预处理：合并附件衍生文本"""
-        attachments = (context or {}).get('attachments') if context else None
+        """合并附件文本，返回处理后的消息。"""
+        attachments = (context or {}).get("attachments") if context else None
         return self.message_processor.merge_attachment_texts(content, attachments)
-    
-    def _get_experiment_version(self, user_id: str, context: Optional[Dict[str, Any]]) -> str:
-        """获取用户的实验版本（A/B 测试）"""
-        channel = (context or {}).get('channel') if context else None
-        return get_experiment_version(
-            user_id=user_id,
-            channel=channel,
-            default_version="v4_default"
-        )
-    
-    async def _analyze_message(
+
+    def _build_request_meta(
         self,
-        content: str,
-        user_id: str,
-        context: Optional[Dict[str, Any]],
-        trace_id: str,
-        prompt_version: str
-    ) -> AnalysisModel:
-        """AI 理解分析：支持多轮思考循环的统一分析入口
-        
-        增强功能：
-        - 支持思考深度（thinking_depth）判断
-        - 支持基于初步结果的深度分析循环
-        - 最多进行3轮思考，逐步深化理解
-        """
-        try:
-            thread_id = (context or {}).get('thread_id') if context else None
-            channel = (context or {}).get('channel') if context else None
-            shared_thread = bool((context or {}).get('shared_thread'))
-            
-            # 初始化累积的上下文数据
-            accumulated_context = {}
-            analysis = None
-            thinking_rounds = 0
-            max_thinking_rounds = 3
-            
-            # 思考循环：最多3轮
-            while thinking_rounds < max_thinking_rounds:
-                thinking_rounds += 1
-                
-                # 获取基础上下文（第一轮）或使用累积的上下文
-                if thinking_rounds == 1:
-                    logger.info(
-                        "analysis.round.started",
-                        trace_id=trace_id,
-                        round=thinking_rounds,
-                        action="fetching_basic_context"
-                    )
-                    base_context = await self.context_manager.get_basic_context(
-                        user_id=user_id,
-                        thread_id=thread_id,
-                        shared_thread=shared_thread,
-                        channel=channel
-                    )
-                    accumulated_context = base_context.copy()
-                    
-                    # 记录基础上下文的内容
-                    logger.info(
-                        "analysis.basic_context.details",
-                        trace_id=trace_id,
-                        round=thinking_rounds,
-                        light_context_count=len(accumulated_context.get('light_context', [])),
-                        light_context_preview=[{
-                            'content': ctx.get('content', '')[:50] + '...' if len(ctx.get('content', '')) > 50 else ctx.get('content', ''),
-                            'type': ctx.get('ai_understanding', {}).get('type') if isinstance(ctx.get('ai_understanding'), dict) else None,
-                            'time': ctx.get('time')  # 显示时间方便调试
-                        } for ctx in accumulated_context.get('light_context', [])[:3]],  # 只显示前3条
-                        household_members=len(accumulated_context.get('household', {}).get('members', [])),
-                        household_names=[m.get('display_name') for m in accumulated_context.get('household', {}).get('members', [])] if accumulated_context.get('household') else []
-                    )
-                
-                # 构建分析请求（包含累积的上下文）
-                analysis_payload = {
-                    "message": content,
-                    "user": {"id": user_id, "thread_id": thread_id, "channel": channel},
-                    "context": {
-                        "shared_thread": shared_thread,
-                        "light_context": accumulated_context.get('light_context', []),
-                        "household": accumulated_context.get('household', {}),
-                        "accumulated_insights": accumulated_context.get('insights', {}),
-                        "thinking_round": thinking_rounds,
-                        "metadata": {
-                            "utc_now": datetime.utcnow().isoformat(),
-                            "low_budget": self._is_low_budget_mode(),
-                        }
-                    }
-                }
-                
-                # 记录准备发送给LLM的内容
-                logger.info(
-                    "analysis.payload.summary",
-                    trace_id=trace_id,
-                    round=thinking_rounds,
-                    message_preview=content[:100] + '...' if len(content) > 100 else content,
-                    context_light_count=len(analysis_payload['context']['light_context']),
-                    has_insights=bool(analysis_payload['context'].get('accumulated_insights')),
-                    thinking_round=analysis_payload['context']['thinking_round']
-                )
-                
-                # 调用 LLM 进行分析
-                system_prompt = await prompt_manager.get_system_prompt_with_tools(prompt_version)
-                understanding_prompt = prompt_manager.get_understanding_prompt(prompt_version)
-                
-                user_prompt = "\n\n".join([
-                    understanding_prompt,
-                    "输入：",
-                    json.dumps(analysis_payload, ensure_ascii=False, default=str),
-                    "请仅返回契约描述的 JSON，不要添加解释。"
-                ])
-                
-                logger.debug(
-                    "llm.request.details",
-                    trace_id=trace_id,
-                    round=thinking_rounds,
-                    system_prompt_length=len(system_prompt),
-                    user_prompt_length=len(user_prompt),
-                    temperature=0.2,
-                    max_tokens=1500
-                )
-                
-                llm_start_time = asyncio.get_event_loop().time()
-                raw_response = await self.llm.chat_json(
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    temperature=0.2,
-                    max_tokens=1500,  # 增加token限制以支持更深入的分析
-                )
-                llm_duration_ms = int((asyncio.get_event_loop().time() - llm_start_time) * 1000)
-                
-                # 记录LLM响应的详细内容
-                logger.info(
-                    "llm.response.summary",
-                    trace_id=trace_id,
-                    round=thinking_rounds,
-                    duration_ms=llm_duration_ms,
-                    response_keys=list(raw_response.keys()) if isinstance(raw_response, dict) else [],
-                    has_understanding='understanding' in raw_response,
-                    has_tool_plan='tool_plan' in raw_response,
-                    has_context_requests='context_requests' in raw_response
-                )
-                
-                # 记录理解内容的详细信息
-                if 'understanding' in raw_response:
-                    understanding = raw_response['understanding']
-                    logger.info(
-                        "llm.understanding.details",
-                        trace_id=trace_id,
-                        round=thinking_rounds,
-                        intent=understanding.get('intent'),
-                        need_action=understanding.get('need_action', False),
-                        need_clarification=understanding.get('need_clarification', False),
-                        entities=list(understanding.get('entities', {}).keys()),
-                        entities_values={k: str(v)[:50] for k, v in understanding.get('entities', {}).items()},
-                        clarification_questions=understanding.get('clarification_questions', []),
-                        thinking_depth=understanding.get('thinking_depth', 0),
-                        needs_deeper_analysis=understanding.get('needs_deeper_analysis', False)
-                    )
-                
-                # 记录工具计划详情
-                if 'tool_plan' in raw_response and raw_response['tool_plan'].get('steps'):
-                    steps = raw_response['tool_plan']['steps']
-                    logger.info(
-                        "llm.tool_plan.details",
-                        trace_id=trace_id,
-                        round=thinking_rounds,
-                        steps_count=len(steps),
-                        tools=[s.get('tool') for s in steps],
-                        first_step_preview={
-                            'tool': steps[0].get('tool'),
-                            'args': list(steps[0].get('args', {}).keys())
-                        } if steps else None
-                    )
-                
-                # 解析响应并保存原始内容
-                try:
-                    analysis = AnalysisModel(**raw_response)
-                    # 保存原始内容用于日志和调试
-                    analysis.understanding.original_content = content
-                    
-                    # 检查是否需要更深入的分析
-                    needs_deeper = raw_response.get('understanding', {}).get('needs_deeper_analysis', False)
-                    
-                    if not needs_deeper or thinking_rounds >= max_thinking_rounds:
-                        # 不需要继续或已达到最大轮数
-                        logger.info(
-                            "thinking_loop.completed", 
-                            trace_id=trace_id,
-                            rounds=thinking_rounds,
-                            thinking_depth=raw_response.get('understanding', {}).get('thinking_depth', 0)
-                        )
-                        break
-                    
-                    # 需要更深入分析，先获取额外上下文
-                    if analysis.context_requests:
-                        logger.info(
-                            "thinking_loop.fetching_context",
-                            trace_id=trace_id,
-                            round=thinking_rounds,
-                            requests_count=len(analysis.context_requests),
-                            request_types=[req.kind for req in analysis.context_requests],
-                            exploration_areas=analysis.understanding.next_exploration_areas
-                        )
-                        
-                        context_start = asyncio.get_event_loop().time()
-                        resolved_context = await self.context_manager.resolve_context_requests(
-                            context_requests=[req.model_dump() for req in analysis.context_requests],
-                            understanding=analysis.understanding.model_dump(),
-                            user_id=user_id,
-                            thread_id=thread_id,
-                            shared_thread=shared_thread,
-                            channel=channel,
-                            trace_id=trace_id
-                        )
-                        
-                        # 记录解析的上下文内容
-                        logger.info(
-                            "thinking_loop.context_resolved",
-                            trace_id=trace_id,
-                            round=thinking_rounds,
-                            duration_ms=int((asyncio.get_event_loop().time() - context_start) * 1000),
-                            resolved_keys=list(resolved_context.keys()),
-                            resolved_counts={k: len(v) if isinstance(v, list) else 1 for k, v in resolved_context.items()},
-                            sample_content={
-                                k: v[0] if isinstance(v, list) and v else str(v)[:100]
-                                for k, v in list(resolved_context.items())[:3]  # 只显示前3个
-                            }
-                        )
-                        
-                        # 更新累积的上下文
-                        accumulated_context.update(resolved_context)
-                        accumulated_context['insights'] = {
-                            'round': thinking_rounds,
-                            'previous_analysis': analysis.understanding.model_dump(),
-                            'exploration_areas': raw_response.get('understanding', {}).get('next_exploration_areas', [])
-                        }
-                    
-                except ValidationError:
-                    # 回退处理
-                    return self._create_fallback_analysis(content, raw_response)
-            
-            return analysis
-            
-        except Exception as e:
-            raise AnalysisError(
-                f"消息理解分析失败: {str(e)}",
-                trace_id=trace_id,
-                context={"content_length": len(content), "thinking_rounds": thinking_rounds},
-                cause=e
-            )
-    
-    async def _handle_clarification(
-        self,
-        analysis: AnalysisModel,
-        context: Optional[Dict[str, Any]],
-        prompt_version: str
-    ) -> str:
-        """处理澄清流程"""
-        try:
-            # 获取澄清提示
-            clarification_prompt = prompt_manager.get_response_clarification_prompt(prompt_version)
-            system_prompt = await prompt_manager.get_system_prompt_with_tools(prompt_version)
-            
-            payload = {
-                'original_message': analysis.understanding.original_content,
-                'understanding': analysis.understanding.model_dump(),
-                'response_directives': analysis.response_directives,
-                'channel': (context or {}).get('channel')
-            }
-            
-            user_prompt = "\n\n".join([
-                clarification_prompt,
-                "输入：",
-                json.dumps(payload, ensure_ascii=False, default=str),
-                "请生成澄清问题。"
-            ])
-            
-            response = await self.llm.chat_text(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                temperature=0.4,
-                max_tokens=220,
-            )
-            
-            return response.strip() if response else "抱歉，我还需要更多信息。"
-            
-        except Exception as e:
-            logger.warning("clarification.failed", error=str(e))
-            return "抱歉，我还需要更多信息。"
-    
-    async def _execute_and_respond(
-        self,
-        analysis: AnalysisModel,
-        original_content: str,
-        user_id: str,
-        context: Optional[Dict[str, Any]],
-        trace_id: str,
-        prompt_version: str
-    ) -> str:
-        """执行工具并生成响应（支持结果验证和反馈优化）
-        
-        增强功能：
-        - 工具执行后验证结果完整性
-        - 必要时执行补充查询
-        - 最多3轮迭代优化
-        """
-        try:
-            thread_id = (context or {}).get('thread_id') if context else None
-            channel = (context or {}).get('channel') if context else None
-            shared_thread = bool((context or {}).get('shared_thread'))
-            
-            # 获取额外上下文
-            resolved_context = await self.context_manager.resolve_context_requests(
-                context_requests=[req.model_dump() for req in analysis.context_requests],
-                understanding=analysis.understanding.model_dump(),
-                user_id=user_id,
-                thread_id=thread_id,
-                shared_thread=shared_thread,
-                channel=channel,
-                trace_id=trace_id
-            )
-            
-            # 准备上下文数据
-            context_payload = {
-                'household': (await self.context_manager.get_basic_context(
-                    user_id, thread_id, shared_thread, channel
-                )).get('household', {})
-            }
-            context_payload.update(resolved_context)
-            
-            # 构建完整工具计划
-            tool_plan = await self._build_complete_tool_plan(
-                analysis=analysis,
-                user_id=user_id,
-                context=context,
-                context_payload=context_payload,
-                prompt_version=prompt_version
-            )
-            
-            # 工具执行和验证循环（最多3轮）
-            execution_rounds = 0
-            max_execution_rounds = 3
-            accumulated_results = {'actions_taken': []}
-            
-            while execution_rounds < max_execution_rounds:
-                execution_rounds += 1
-                
-                # 执行工具
-                round_result = await self.tool_executor.execute_tool_plan(
-                    steps=tool_plan.get('steps', []),
-                    understanding=analysis.understanding.model_dump(),
-                    user_id=user_id,
-                    context=context,
-                    trace_id=trace_id,
-                    context_data=context_payload
-                )
-                
-                # 累积结果
-                accumulated_results['actions_taken'].extend(
-                    round_result.get('actions_taken', [])
-                )
-                
-                # 获取验证配置
-                verification_config = tool_plan.get('verification') or analysis.tool_plan.verification
-                
-                if not verification_config or not verification_config.get('check_completeness'):
-                    # 不需要验证，直接结束
-                    logger.info(
-                        "tool_execution.completed_without_verification",
-                        trace_id=trace_id,
-                        round=execution_rounds
-                    )
-                    break
-                
-                # 验证结果完整性
-                needs_supplement = await self._verify_execution_results(
-                    results=accumulated_results,
-                    verification_config=verification_config,
-                    understanding=analysis.understanding.model_dump(),
-                    trace_id=trace_id
-                )
-                
-                if not needs_supplement:
-                    # 结果满意，结束循环
-                    logger.info(
-                        "tool_execution.verified_complete",
-                        trace_id=trace_id,
-                        rounds=execution_rounds
-                    )
-                    break
-                
-                if execution_rounds >= max_execution_rounds:
-                    # 达到最大轮数，停止
-                    logger.warning(
-                        "tool_execution.max_rounds_reached",
-                        trace_id=trace_id,
-                        rounds=execution_rounds
-                    )
-                    break
-                
-                # 需要补充查询，构建补充计划
-                fallback_strategy = verification_config.get('fallback_strategy', 'expand_search')
-                
-                logger.info(
-                    "tool_execution.supplementing",
-                    trace_id=trace_id,
-                    round=execution_rounds,
-                    strategy=fallback_strategy
-                )
-                
-                # 基于策略调整工具计划
-                tool_plan = await self._adjust_tool_plan(
-                    original_plan=tool_plan,
-                    strategy=fallback_strategy,
-                    previous_results=accumulated_results,
-                    understanding=analysis.understanding.model_dump(),
-                    prompt_version=prompt_version
-                )
-            
-            # 使用累积的结果生成响应
-            execution_result = accumulated_results
-            
-            # 生成响应
-            is_simple = await self.tool_executor.is_simple_operation(tool_plan.get('steps', []))
-            
-            if is_simple:
-                response = await self._generate_simple_response(
-                    analysis, execution_result, context, prompt_version, context_payload
-                )
-            else:
-                response = await self._generate_detailed_response(
-                    original_content, analysis, execution_result, context, prompt_version, context_payload
-                )
-            
-            # 存储对话回合
-            await self._store_conversation_turn(
-                user_id=user_id,
-                thread_id=thread_id,
-                trace_id=trace_id,
-                user_message=original_content,
-                assistant_message=response,
-                understanding=analysis.understanding.model_dump(),
-                context=context
-            )
-            
-            return response
-            
-        except Exception as e:
-            raise AIEngineError(
-                f"执行和响应生成失败: {str(e)}",
-                trace_id=trace_id,
-                context={"user_id": user_id},
-                cause=e
-            )
-    
-    # =================== 辅助方法 ===================
-    
-    def _create_fallback_analysis(self, content: str, raw_response: dict) -> AnalysisModel:
-        """创建回退分析结果"""
-        understanding = raw_response.get('understanding', {})
-        return AnalysisModel(
-            understanding=UnderstandingModel(
-                intent=understanding.get('intent'),
-                entities=understanding.get('entities', {}),
-                need_action=bool(understanding.get('need_action')),
-                need_clarification=bool(understanding.get('need_clarification')),
-                missing_fields=understanding.get('missing_fields', []),
-                clarification_questions=understanding.get('clarification_questions', []),
-                thinking_depth=understanding.get('thinking_depth', 0),
-                needs_deeper_analysis=bool(understanding.get('needs_deeper_analysis')),
-                analysis_reasoning=understanding.get('analysis_reasoning'),
-                next_exploration_areas=understanding.get('next_exploration_areas', []),
-                original_content=content
-            ),
-            context_requests=[],
-            tool_plan=ToolPlanModel(
-                steps=[],
-                verification=understanding.get('verification')
-            ),
-            response_directives=raw_response.get('response_directives', {})
-        )
-    
-    async def _verify_execution_results(
-        self,
-        results: Dict[str, Any],
-        verification_config: Dict[str, Any],
-        understanding: Dict[str, Any],
-        trace_id: str
-    ) -> bool:
-        """验证工具执行结果的完整性
-        
-        返回 True 表示需要补充查询，False 表示结果满意
-        """
-        try:
-            # 验证输入参数类型（调试用）
-            if not isinstance(results, dict):
-                logger.warning(
-                    "verification.invalid_results_type",
-                    trace_id=trace_id,
-                    results_type=type(results).__name__,
-                    results_preview=str(results)[:100] if results else 'None'
-                )
-                return False  # 类型错误，跳过验证
-            
-            if not isinstance(verification_config, dict):
-                logger.debug(
-                    "verification.no_config",
-                    trace_id=trace_id,
-                    config_type=type(verification_config).__name__
-                )
-                return False  # 没有验证配置，跳过验证
-            # 检查最小结果数量
-            min_expected = verification_config.get('min_results_expected')
-            if min_expected:
-                actual_count = sum(
-                    1 for action in results.get('actions_taken', [])
-                    if (isinstance(action, dict) and 
-                        isinstance(action.get('result'), dict) and 
-                        action.get('result', {}).get('success'))
-                )
-                if actual_count < min_expected:
-                    logger.info(
-                        "verification.insufficient_results",
-                        trace_id=trace_id,
-                        expected=min_expected,
-                        actual=actual_count
-                    )
-                    return True  # 需要补充
-            
-            # 检查是否有失败的操作
-            failed_actions = []
-            for action in results.get('actions_taken', []):
-                if not isinstance(action, dict):
-                    continue
-                result = action.get('result')
-                if isinstance(result, dict):
-                    if not result.get('success'):
-                        failed_actions.append(action)
-                else:
-                    # result 不是字典，视为失败
-                    failed_actions.append(action)
-            
-            if failed_actions and verification_config.get('retry_on_failure'):
-                logger.info(
-                    "verification.has_failures",
-                    trace_id=trace_id,
-                    failed_count=len(failed_actions)
-                )
-                return True  # 需要重试
-            
-            # 基于理解深度判断
-            thinking_depth = understanding.get('thinking_depth', 0)
-            if thinking_depth >= 2:  # 复杂问题
-                # 检查是否有足够的数据支持分析
-                if isinstance(results, dict):
-                    total_results = len(results.get('actions_taken', []))
-                    if total_results < 2:  # 复杂问题至少需要2个数据源
-                        return True
-                else:
-                    # results不是预期的dict格式，跳过验证
-                    return False
-            
-            return False  # 结果满意
-            
-        except Exception as e:
-            logger.warning(
-                "verification.failed",
-                trace_id=trace_id,
-                error=str(e)
-            )
-            return False  # 验证失败，不再补充
-    
-    async def _adjust_tool_plan(
-        self,
-        original_plan: Dict[str, Any],
-        strategy: str,
-        previous_results: Dict[str, Any],
-        understanding: Dict[str, Any],
-        prompt_version: str
+        *,
+        state: AgentState,
+        base_context: Dict[str, Any],
+        incoming_context: Optional[Dict[str, Any]],
+        prompt_version: str,
     ) -> Dict[str, Any]:
-        """基于策略调整工具执行计划"""
-        try:
-            if strategy == 'expand_search':
-                # 扩大搜索范围
-                adjusted_steps = []
-                for step in original_plan.get('steps', []):
-                    step_copy = step.copy()
-                    if step_copy.get('tool') == 'search':
-                        # 增加搜索限制
-                        args = step_copy.get('args', {})
-                        current_limit = args.get('filters', {}).get('limit', 10)
-                        args.setdefault('filters', {})['limit'] = min(current_limit * 2, 50)
-                        step_copy['args'] = args
-                    adjusted_steps.append(step_copy)
-                
-                return {'steps': adjusted_steps, 'verification': original_plan.get('verification')}
-            
-            elif strategy == 'try_different_approach':
-                # 尝试不同的方法（例如从精确搜索改为语义搜索）
-                # 这里需要根据具体情况调整，暂时返回原计划
-                return original_plan
-            
-            else:
-                # 默认策略：返回原计划
-                return original_plan
-                
-        except Exception as e:
-            logger.warning(
-                "adjust_plan.failed",
-                error=str(e)
-            )
-            return original_plan
-    
-    async def _build_complete_tool_plan(
-        self,
-        analysis: AnalysisModel,
-        user_id: str,
-        context: Optional[Dict[str, Any]],
-        context_payload: Dict[str, Any],
-        prompt_version: str
-    ) -> Dict[str, Any]:
-        """构建完整的工具执行计划"""
-        existing_steps = analysis.tool_plan.steps
-        if existing_steps and not analysis.tool_plan.requires_context:
-            return {'steps': [step.model_dump() for step in existing_steps]}
-        
-        # 需要 AI 重新规划
-        system_prompt = await prompt_manager.get_system_prompt_with_tools(prompt_version)
-        planning_prompt = await prompt_manager.get_tool_planning_prompt_with_tools(prompt_version)
-        
-        payload = {
-            'understanding': analysis.understanding.model_dump(),
-            'analysis_plan': analysis.tool_plan.model_dump(),
-            'context_payload': context_payload,
-            'user': {
-                'id': user_id,
-                'channel': (context or {}).get('channel'),
-                'thread_id': (context or {}).get('thread_id'),
-            }
-        }
-        
-        user_prompt = "\n\n".join([
-            planning_prompt,
-            '输入数据：',
-            json.dumps(payload, ensure_ascii=False, default=str),
-            '请仅返回 JSON：{"steps": [...], "meta": {...可选}}，不要附加解释。'
-        ])
-        
-        try:
-            plan = await self.llm.chat_json(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                temperature=0.2,
-                max_tokens=800,
-            )
-            
-            if isinstance(plan, dict) and isinstance(plan.get('steps'), list):
-                return plan
-        except Exception as e:
-            logger.warning('tool_plan.generation.failed', error=str(e))
-        
-        return {'steps': []}
-    
-    async def _generate_simple_response(
-        self,
-        analysis: AnalysisModel,
-        execution_result: Dict[str, Any],
-        context: Optional[Dict[str, Any]],
-        prompt_version: str,
-        context_payload: Dict[str, Any]
-    ) -> str:
-        """生成简单确认回复"""
-        # 检查是否有 AI 建议的回复
-        if analysis.understanding.suggested_reply:
-            return analysis.understanding.suggested_reply.strip()
-        
-        # 低预算模式简化回复
-        if self._is_low_budget_mode():
-            success_count = sum(
-                1 for action in execution_result.get('actions_taken', [])
-                if isinstance(action, dict) and (action.get('result', {}) or {}).get('success')
-            )
-            return "✅ 已记录！" if success_count else "⚠️ 处理遇到问题，请稍后重试。"
-        
-        # 使用 AI 生成确认回复
-        return await self._generate_ack_with_ai(
-            analysis, execution_result, context, prompt_version, context_payload
+        """构建本次请求的实时元数据，供 Prompt 使用。"""
+        tz_name = self._determine_timezone(base_context, incoming_context)
+        zone = self._safe_zoneinfo(tz_name)
+        now_local = datetime.now(zone)
+        now_utc = datetime.now(ZoneInfo("UTC"))
+        month_last_day = calendar.monthrange(now_local.year, now_local.month)[1]
+        month_start = datetime(now_local.year, now_local.month, 1, tzinfo=zone)
+        month_end = datetime(
+            now_local.year,
+            now_local.month,
+            month_last_day,
+            23,
+            59,
+            59,
+            tzinfo=zone,
         )
-    
-    async def _generate_detailed_response(
-        self,
-        original_message: str,
-        analysis: AnalysisModel,
-        execution_result: Dict[str, Any],
-        context: Optional[Dict[str, Any]],
-        prompt_version: str,
-        context_payload: Dict[str, Any]
-    ) -> str:
-        """生成详细回复"""
-        response_prompt = prompt_manager.get_response_prompt(prompt_version)
-        system_prompt = await prompt_manager.get_system_prompt_with_tools(prompt_version)
-        
-        payload = {
-            'original_message': original_message,
-            'understanding': analysis.understanding.model_dump(),
-            'execution_result': execution_result,
-            'response_directives': analysis.response_directives,
-            'context_payload': context_payload,
-            'channel': (context or {}).get('channel'),
+        days_remaining = max(0, month_last_day - now_local.day)
+
+        message_sent_iso = None
+        message_sent_utc = None
+        message_timestamp = None
+        webhook_received_iso = None
+        webhook_received_utc = None
+        if incoming_context:
+            message_sent_iso = incoming_context.get("message_sent_at_iso")
+            message_sent_utc = incoming_context.get("message_sent_at_utc")
+            message_timestamp = incoming_context.get("timestamp")
+            webhook_received_iso = incoming_context.get("webhook_received_at_iso")
+            webhook_received_utc = incoming_context.get("webhook_received_at_utc")
+
+        clock_section = {
+            "now_local_iso": now_local.isoformat(),
+            "now_utc_iso": now_utc.isoformat(),
+            "timezone": tz_name,
+            "today": now_local.date().isoformat(),
+            "weekday_cn": self._weekday_cn(now_local.weekday()),
+            "weekday_en": now_local.strftime("%A"),
+            "time_hm": now_local.strftime("%H:%M"),
         }
-        
-        user_prompt = "\n\n".join([
-            response_prompt,
-            "输入：",
-            json.dumps(payload, ensure_ascii=False, default=str),
-            "请生成最终回复。"
-        ])
-        
-        try:
-            response = await self.llm.chat_text(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                temperature=0.6,
-                max_tokens=600,
-            )
-            
-            generated = response.strip() if response else "抱歉，我将继续关注您的需求。"
-            
-            # Threema 长度限制
-            if context and context.get('channel') == 'threema' and len(generated) > 400:
-                generated = generated[:397] + '...'
-            
-            return generated
-            
-        except Exception as e:
-            logger.warning('detailed_response.failed', error=str(e))
-            return "抱歉，我将继续关注您的需求。"
-    
-    async def _generate_ack_with_ai(
-        self,
-        analysis: AnalysisModel,
-        execution_result: Dict[str, Any],
-        context: Optional[Dict[str, Any]],
-        prompt_version: str,
-        context_payload: Dict[str, Any]
-    ) -> str:
-        """使用 AI 生成确认回复"""
-        ack_template = prompt_manager.get_ack_prompt(prompt_version)
-        if not ack_template:
-            ack_template = "{task_context}"
-        
-        task_context = {
-            'understanding': analysis.understanding.model_dump(),
-            'execution_result': execution_result,
-            'response_directives': analysis.response_directives,
-            'context_payload': context_payload,
-            'channel': (context or {}).get('channel'),
+        period_section = {
+            "month_label": now_local.strftime("%Y-%m"),
+            "month_start_iso": month_start.isoformat(),
+            "month_end_iso": month_end.isoformat(),
+            "days_into_month": now_local.day,
+            "days_remaining": days_remaining,
         }
-        
-        system_prompt = await prompt_manager.get_system_prompt_with_tools(prompt_version)
-        user_prompt = ack_template.format(
-            task_context=json.dumps(task_context, ensure_ascii=False, default=str)
-        )
-        
+        message_section = {
+            "channel": state.channel,
+            "thread_id": state.thread_id,
+            "message_sent_at_iso": message_sent_iso,
+            "message_sent_at_utc": message_sent_utc,
+            "webhook_received_at_iso": webhook_received_iso,
+            "webhook_received_at_utc": webhook_received_utc,
+            "raw_timestamp": message_timestamp,
+        }
+        runtime_section = {
+            "engine": "AIEngineV2",
+            "prompt_version": prompt_version,
+            "agent_max_turns": self.agent_max_turns,
+            "trace_id": state.trace_id,
+            "user_id": state.user_id,
+            "shared_thread": bool((incoming_context or {}).get("shared_thread")),
+        }
+
+        message_section = {k: v for k, v in message_section.items() if v is not None}
+        runtime_section = {k: v for k, v in runtime_section.items() if v is not None}
+
+        return {
+            "clock": clock_section,
+            "period": period_section,
+            "message": message_section,
+            "runtime": runtime_section,
+        }
+
+    def _determine_timezone(
+        self,
+        base_context: Optional[Dict[str, Any]],
+        incoming_context: Optional[Dict[str, Any]],
+    ) -> str:
+        """按优先级选择当前会话应使用的时区。"""
+        if incoming_context:
+            for key in ("timezone", "user_timezone", "preferred_timezone"):
+                candidate = incoming_context.get(key)
+                if isinstance(candidate, str) and candidate.strip():
+                    return candidate.strip()
+            raw_webhook = incoming_context.get("raw_webhook")
+            if isinstance(raw_webhook, dict):
+                candidate = raw_webhook.get("timezone")
+                if isinstance(candidate, str) and candidate.strip():
+                    return candidate.strip()
+        household_context = (base_context or {}).get("household")
+        if isinstance(household_context, dict):
+            households = household_context.get("households") or []
+            for entry in households:
+                config = entry.get("config") or {}
+                candidate = config.get("timezone")
+                if isinstance(candidate, str) and candidate.strip():
+                    return candidate.strip()
+        return getattr(settings, "DEFAULT_TIMEZONE", "Asia/Shanghai")
+
+    @staticmethod
+    def _safe_zoneinfo(tz_name: str) -> ZoneInfo:
         try:
-            response = await self.llm.chat_text(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                temperature=0.3,
-                max_tokens=120,
-            )
-            return response.strip() if response else "✅ 已完成。"
+            return ZoneInfo(tz_name)
         except Exception:
-            return "✅ 已完成。"
-    
-    def _record_experiment_result(
-        self,
-        user_id: str,
-        context: Optional[Dict[str, Any]],
-        trace_id: str,
-        analysis: AnalysisModel,
-        response: str
-    ):
-        """记录实验结果（用于 A/B 测试）"""
+            return ZoneInfo("UTC")
+
+    @staticmethod
+    def _weekday_cn(index: int) -> str:
+        labels = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
         try:
-            # 获取活跃实验
-            active_experiments = ab_testing_manager.list_active_experiments()
-            if not active_experiments:
-                return
-            
-            channel = (context or {}).get('channel', 'unknown')
-            
-            # 为每个实验记录结果
-            for experiment in active_experiments:
-                variant, version = ab_testing_manager.get_variant_for_user(
-                    user_id, experiment['id'], channel=channel
-                )
-                
-                if variant != "control":  # 只记录实验组的结果
-                    result = ExperimentResult(
-                        user_id=user_id,
-                        experiment_id=experiment['id'],
-                        variant=variant,
-                        trace_id=trace_id,
-                        channel=channel,
-                        timestamp=time.time(),
-                        response_time_ms=0,  # TODO: 计算实际响应时间
-                        success=True,  # TODO: 基于实际执行结果判断
-                        need_clarification=analysis.understanding.need_clarification,
-                        tool_calls_count=len(analysis.tool_plan.steps),
-                        response_length=len(response)
-                    )
-                    
-                    ab_testing_manager.record_result(result)
-                    
-        except Exception as e:
-            logger.warning("experiment_result.record.failed", error=str(e))
-    
+            return labels[index % 7]
+        except Exception:
+            return "周?"
+
+    def _get_experiment_version(self, user_id: str, context: Optional[Dict[str, Any]]) -> str:
+        """根据用户与渠道获取当前使用的 prompt 版本（兼容 A/B 测试）。"""
+        channel = (context or {}).get("channel") if context else None
+        return get_experiment_version(user_id=user_id, channel=channel, default_version="v5_unified")
+
     async def _handle_error(self, error: Exception, trace_id: str, user_id: str) -> str:
-        """统一错误处理"""
+        """统一错误处理，记录日志并返回用户友好的提示。"""
         logger.error(
             "message.process.error",
             trace_id=trace_id,
             user_id=user_id,
             error_type=type(error).__name__,
-            error=str(error)
+            error=str(error),
         )
-        
-        # 根据错误类型返回用户友好的消息
-        if isinstance(error, (AnalysisError, ContextResolutionError, ToolPlanningError)):
+        if isinstance(error, (ContextResolutionError, ToolExecutionError, LLMError)):
             return get_user_friendly_message(error)
-        elif isinstance(error, (MCPToolError, ToolTimeoutError, ToolExecutionError)):
-            return get_user_friendly_message(error)
-        elif isinstance(error, LLMError):
-            return get_user_friendly_message(error)
-        else:
-            return "抱歉，处理您的消息时出现了问题，请稍后重试。"
-    
-    def _cleanup_trace(self, trace_id: str):
-        """清理追踪数据"""
-        try:
-            self._tool_calls_by_trace.pop(trace_id, None)
-            self._emb_cache_by_trace.pop(trace_id, None)
-        except Exception:
-            pass
-    
-    def _is_low_budget_mode(self) -> bool:
-        """检查是否处于低预算模式"""
-        return bool(getattr(settings, 'LOW_LLM_BUDGET', False))
-    
-    # =================== MCP 工具调用 ===================
-    
-    async def _call_mcp_tool(self, tool_name: str, **kwargs) -> Dict[str, Any]:
-        """调用 MCP 工具 - 简化版本"""
-        trace_id = kwargs.get('trace_id')
-        
+        return "抱歉，处理您的消息时出现了问题，请稍后重试。"
+
+    def _cleanup_trace(self, trace_id: str) -> None:
+        """清理与 trace 相关的缓存数据。"""
+        self._tool_calls_by_trace.pop(trace_id, None)
+        self._emb_cache_by_trace.pop(trace_id, None)
+
+    # ------------------------------------------------------------------
+    # MCP 调用与缓存
+    # ------------------------------------------------------------------
+
+    async def _call_mcp_tool(self, tool_name: str, trace_id: Optional[str] = None, **kwargs) -> Any:
+        """
+        调用 MCP 工具并自动记录成功 / 失败。
+
+        - 所有参数以 JSON 形式透传。
+        - 成功 / 失败都会写入 `_tool_calls_by_trace`，便于追踪一次会话的工具调用链路。
+        """
         if self._http_client is None:
             self._http_client = httpx.AsyncClient()
-        
         try:
-            timeout = 10.0  # 统一超时时间
             response = await self._http_client.post(
                 f"{self.mcp_url}/tool/{tool_name}",
                 json=kwargs,
-                timeout=timeout,
+                timeout=10.0,
             )
             response.raise_for_status()
             result = response.json()
-            
-            # 记录调用
             if trace_id:
-                self._tool_calls_by_trace.setdefault(trace_id, []).append({
-                    'tool': tool_name,
-                    'success': True,
-                    'timestamp': time.time()
-                })
-            
+                self._tool_calls_by_trace.setdefault(trace_id, []).append(
+                    {"tool": tool_name, "success": True, "timestamp": time.time()}
+                )
             return result
-            
-        except Exception as e:
-            # 记录失败
+        except Exception as exc:
             if trace_id:
-                self._tool_calls_by_trace.setdefault(trace_id, []).append({
-                    'tool': tool_name,
-                    'success': False,
-                    'error': str(e),
-                    'timestamp': time.time()
-                })
-            
+                self._tool_calls_by_trace.setdefault(trace_id, []).append(
+                    {"tool": tool_name, "success": False, "error": str(exc), "timestamp": time.time()}
+                )
             raise ToolExecutionError(
-                f"工具 {tool_name} 调用失败: {str(e)}",
+                f"工具 {tool_name} 调用失败: {exc}",
                 trace_id=trace_id,
                 context={"tool_name": tool_name},
-                cause=e
+                cause=exc,
             )
-    
-    # =================== 向量嵌入缓存 ===================
-    
-    async def _get_embedding_cached(self, text: str, trace_id: Optional[str]) -> Optional[List[float]]:
-        """获取缓存的向量嵌入"""
-        if not text:
-            return None
-        
-        # 检查 trace 级缓存
-        trace_cache = self._emb_cache_by_trace.get(trace_id or '', {})
-        if text in trace_cache:
-            return trace_cache[text]
-        
-        # 检查全局缓存
-        global_item = self._emb_cache_global.get(text)
-        if global_item:
-            vec, ts = global_item
-            if (time.time() - ts) < self._emb_cache_global_ttl:
-                trace_cache[text] = vec
-                if trace_id:
-                    self._emb_cache_by_trace[trace_id] = trace_cache
-                return vec
-        
-        # 生成新向量
-        try:
-            embs = await self.llm.embed([text])
-            vec = [float(x) for x in (embs[0] or [])] if embs else None
-        except Exception:
-            vec = None
-        
-        if vec is not None:
-            # 更新缓存
-            trace_cache[text] = vec
-            if trace_id:
-                self._emb_cache_by_trace[trace_id] = trace_cache
-            
-            # 更新全局缓存（LRU）
-            self._update_global_embedding_cache(text, vec)
-        
-        return vec
-    
-    def _update_global_embedding_cache(self, text: str, vec: List[float]):
-        """更新全局向量缓存（简单的 LRU）"""
-        try:
-            # 容量控制
-            if len(self._emb_cache_global) >= self._emb_cache_global_max_items:
-                # 移除最旧的项
-                oldest_key = min(
-                    self._emb_cache_global.keys(),
-                    key=lambda k: self._emb_cache_global[k][1]
-                )
-                self._emb_cache_global.pop(oldest_key, None)
-            
-            self._emb_cache_global[text] = (vec, time.time())
-        except Exception:
-            pass
-    
-    # =================== 对话存储 ===================
-    
+
     async def _store_conversation_turn(
         self,
+        *,
         user_id: str,
         thread_id: Optional[str],
         trace_id: str,
         user_message: str,
         assistant_message: str,
-        understanding: Dict[str, Any],
-        context: Optional[Dict[str, Any]]
-    ):
-        """存储对话回合"""
+        memory_record: Dict[str, Any],
+        context: Optional[Dict[str, Any]],
+    ) -> None:
+        """将本轮对话及线程工作记忆写入 MCP，便于后续上下文引用。"""
         try:
             common = {
-                'type': 'chat_turn',
-                'thread_id': thread_id,
-                'trace_id': trace_id,
-                'channel': (context or {}).get('channel'),
-                'timestamp': datetime.now().isoformat()
+                "type": "chat_turn",
+                "thread_id": thread_id,
+                "trace_id": trace_id,
+                "channel": (context or {}).get("channel"),
+                "timestamp": datetime.now().isoformat(),
             }
-            
-            # 平铺entities到顶层（与单个store保持一致，确保amount/occurred_at在顶层）
-            entities = understanding.get('entities', {})
-            
+
+            should_store = True
+            intent = None
+            entities: Dict[str, Any] = {}
+            extra_payload: Dict[str, Any] = {}
+            structured_summary: Optional[Dict[str, Any]] = None
+            scratchpad: Optional[Dict[str, Any]] = None
+            confidence = None
+
+            if isinstance(memory_record, dict):
+                should_store = memory_record.get("should_store", True)
+                intent = memory_record.get("intent")
+                if should_store:
+                    entities = memory_record.get("entities", {}) or {}
+                confidence = memory_record.get("confidence")
+                extra_payload = memory_record.get("extra", {}) or {}
+                scratchpad = extra_payload.get("thread_scratchpad")
+                structured_summary = extra_payload.get("structured_summary")
+
+            speaker_identifier = (
+                (context or {}).get("speaker")
+                or (context or {}).get("sender_id")
+                or (context or {}).get("author_id")
+                or (context or {}).get("nickname")
+                or (context or {}).get("from")
+                or extra_payload.get("speaker")
+                or user_id
+            )
+            speaker_display = (
+                (context or {}).get("nickname")
+                or extra_payload.get("speaker")
+                or speaker_identifier
+            )
+
+            assistant_name = getattr(settings, "ASSISTANT_NAME", "FAA Assistant")
+            assistant_speaker = extra_payload.get("assistant_speaker") or assistant_name
+
             user_ai = {
                 **common,
-                'role': 'user',
-                'intent': understanding.get('intent'),
-                **entities,  # 平铺entities，不再嵌套
+                "role": "user",
+                "intent": intent,
+                **entities,
+                "speaker": speaker_identifier,
+                "speaker_display": speaker_display,
             }
-            
             assistant_ai = {
                 **common,
-                'role': 'assistant',
-                'intent': understanding.get('intent'),
-                **entities,  # 平铺entities，不再嵌套
+                "role": "assistant",
+                "intent": intent,
+                **entities,
+                "speaker": assistant_speaker,
+                "speaker_display": assistant_name,
             }
-            
-            memories = [
-                {"content": user_message, "ai_data": user_ai, "user_id": user_id},
-                {"content": assistant_message, "ai_data": assistant_ai, "user_id": user_id},
-            ]
-            
-            await self._call_mcp_tool('batch_store', memories=memories, trace_id=trace_id)
-            
-        except Exception as e:
-            logger.error("store_conversation.failed", trace_id=trace_id, error=str(e))
-    
-    # =================== 提醒任务 ===================
-    
-    async def check_and_send_reminders(self, send_func):
-        """检查并发送待发提醒
-        
-        Args:
-            send_func: 发送函数，签名为 async def(user_id: str, content: str) -> bool
-        """
+            if confidence is not None:
+                user_ai["confidence"] = confidence
+                assistant_ai["confidence"] = confidence
+            if extra_payload:
+                user_ai["extra"] = extra_payload
+                assistant_ai["extra"] = extra_payload
+
+            if should_store:
+                memories = [
+                    {"content": user_message, "ai_data": user_ai, "user_id": user_id},
+                    {"content": assistant_message, "ai_data": assistant_ai, "user_id": user_id},
+                ]
+                await self._call_mcp_tool("batch_store", memories=memories, trace_id=trace_id)
+            else:
+                logger.debug("store_conversation.skipped", trace_id=trace_id)
+
+            if thread_id and isinstance(scratchpad, dict):
+                try:
+                    summary_content = scratchpad.get("conversation_focus") or json.dumps(
+                        scratchpad, ensure_ascii=False
+                    )
+                    summary_ai_data = {
+                        "type": "thread_summary",
+                        "thread_id": thread_id,
+                        "thread_scratchpad": scratchpad,
+                        "structured_summary": structured_summary,
+                        "conversation_focus": scratchpad.get("conversation_focus"),
+                        "updated_at": datetime.now().isoformat(),
+                        "intent": intent,
+                        "speaker": speaker_identifier,
+                        "confidence": confidence,
+                    }
+                    await self._call_mcp_tool(
+                        "store",
+                        content=summary_content or "(thread summary)",
+                        ai_data=summary_ai_data,
+                        user_id=user_id,
+                        external_key=f"thread_summary:{thread_id}",
+                        trace_id=trace_id,
+                    )
+                    logger.debug(
+                        "store.thread_summary.upserted",
+                        trace_id=trace_id,
+                        thread_id=thread_id,
+                        focus=scratchpad.get("conversation_focus"),
+                    )
+                except Exception as summary_exc:
+                    logger.warning(
+                        "store.thread_summary.failed",
+                        trace_id=trace_id,
+                        thread_id=thread_id,
+                        error=str(summary_exc),
+                    )
+        except Exception as exc:
+            logger.error("store_conversation.failed", trace_id=trace_id, error=str(exc))
+
+    def _record_experiment_result(
+        self,
+        *,
+        user_id: str,
+        context: Optional[Dict[str, Any]],
+        trace_id: str,
+        state: AgentState,
+        final_response: AgentFinalResponseModel,
+    ) -> None:
+        """若存在实验配置，记录本次对话的指标数据（工具次数、回复长度等）。"""
         try:
-            # 获取所有活跃用户列表
+            active_experiments = ab_testing_manager.list_active_experiments()
+            if not active_experiments:
+                return
+            channel = (context or {}).get("channel", "unknown")
+            for experiment in active_experiments:
+                variant, _ = ab_testing_manager.get_variant_for_user(user_id, experiment["id"], channel=channel)
+                if variant == "control":
+                    continue
+                result = ExperimentResult(
+                    user_id=user_id,
+                    experiment_id=experiment["id"],
+                    variant=variant,
+                    trace_id=trace_id,
+                    channel=channel,
+                    timestamp=time.time(),
+                    response_time_ms=0,
+                    success=final_response.status == "success",
+                    need_clarification=False,
+                    tool_calls_count=state.step_count,
+                    response_length=len(final_response.reply or ""),
+                )
+                ab_testing_manager.record_result(result)
+        except Exception as exc:
+            logger.warning("experiment_result.record.failed", error=str(exc))
+
+    # ------------------------------------------------------------------
+    # Reminders 与其他业务辅助 - 直接沿用上一版逻辑
+    # ------------------------------------------------------------------
+
+    async def check_and_send_reminders(self, send_func):
+        """检查所有用户的待发提醒并调用 `send_func` 派发。"""
+        try:
             all_users = await self._get_all_active_users()
-            
             if not all_users:
                 logger.debug("reminder.no_users")
                 return
-            
             total_reminders = 0
-            
-            # 逐个检查每个用户的待发提醒
             for user_id in all_users:
                 try:
-                    user_reminders = await self._call_mcp_tool(
-                        'get_pending_reminders',
-                        user_id=user_id
-                    )
-                    
+                    user_reminders = await self._call_mcp_tool("get_pending_reminders", user_id=user_id)
                     if not user_reminders or not isinstance(user_reminders, list):
                         continue
-                    
                     total_reminders += len(user_reminders)
-                    
                     for reminder in user_reminders:
                         await self._process_single_reminder(reminder, user_id, send_func)
-                
-                except Exception as e:
-                    logger.error(
-                        "reminder.user_check_failed",
-                        user_id=user_id,
-                        error=str(e)
-                    )
-            
+                except Exception as exc:
+                    logger.error("reminder.user_check_failed", user_id=user_id, error=str(exc))
             if total_reminders > 0:
                 logger.info("reminder.check_completed", total_found=total_reminders)
-            
-        except Exception as e:
-            logger.error("reminder.check_failed", error=str(e))
-    
+        except Exception as exc:
+            logger.error("reminder.check_failed", error=str(exc))
+
     async def _get_all_active_users(self) -> List[str]:
-        """获取所有活跃用户ID列表"""
+        """结合家庭配置与提醒表推断需要派发提醒的 user_id 列表。"""
         try:
-            # 方法1：通过家庭服务获取所有用户
             household_context = await household_service.get_context()
-            family_scope = household_context.get('family_scope', {})
-            user_ids = family_scope.get('user_ids', [])
-            
-            if user_ids:
-                logger.debug("reminder.users_from_household", count=len(user_ids))
-                return user_ids
-            
-            # 方法2：回退策略 - 通过数据库直接查询
-            logger.info("reminder.fallback_to_db_query")
-            return await self._get_users_from_db()
-            
-        except Exception as e:
-            logger.warning("get_active_users.failed", error=str(e))
+            family_scope = household_context.get("family_scope", {}) if household_context else {}
+            candidate_ids = set(family_scope.get("user_ids", []) or [])
+            reminder_users = await self._get_users_from_reminders()
+            candidate_ids.update(reminder_users)
+            if candidate_ids:
+                logger.debug(
+                    "reminder.users_from_union",
+                    family_count=len(family_scope.get("user_ids", []) or []),
+                    reminder_only=len(candidate_ids - set(family_scope.get("user_ids", []) or [])),
+                )
+                return list(candidate_ids)
+            logger.info("reminder.no_candidates_found")
             return []
-    
-    async def _get_users_from_db(self) -> List[str]:
-        """从数据库直接获取用户列表（回退方法）"""
+        except Exception as exc:
+            logger.warning("get_active_users.failed", error=str(exc))
+            return []
+
+    async def _get_users_from_reminders(self) -> List[str]:
+        """从提醒表获取仍有待发提醒的用户集合。"""
         try:
-            # 简化：只获取有渠道的用户（能接收提醒的用户）
-            if self._http_client is None:
-                self._http_client = httpx.AsyncClient()
-            
-            # 通过MCP服务调用原生SQL（如果支持）
-            # 这里暂时返回空列表，避免复杂的实现
-            logger.warning("reminder.no_users_available")
-            return []
-            
-        except Exception as e:
-            logger.warning("get_users_from_db.failed", error=str(e))
-            return []
-    
+            result = await self._call_mcp_tool("list_reminder_user_ids")
+            if isinstance(result, dict) and result.get("success"):
+                return [uid for uid in result.get("user_ids", []) if uid]
+        except Exception as exc:
+            logger.debug("reminder.users_from_reminders.failed", error=str(exc))
+        return []
+
     async def _process_single_reminder(self, reminder: dict, user_id: str, send_func):
-        """处理单个提醒"""
+        """发送单条提醒并在成功后标记状态，必要时排下一次提醒。"""
         try:
-            reminder_id = reminder.get('reminder_id')
-            content = reminder.get('content', '')
-            ai_understanding = reminder.get('ai_understanding', {})
-            
+            reminder_id = reminder.get("reminder_id")
+            memory_id = reminder.get("memory_id")
+            content = reminder.get("content", "")
+            ai_understanding = reminder.get("ai_understanding", {})
+            payload = reminder.get("payload") or {}
             if not reminder_id:
                 logger.warning("reminder.missing_id", reminder=reminder)
                 return
-            
-            # 生成提醒消息
-            reminder_text = self._format_reminder_message(content, ai_understanding)
-            
-            # 发送提醒
+            reminder_text = await self._format_reminder_message(
+                content,
+                ai_understanding,
+                payload if isinstance(payload, dict) else {},
+                user_id,
+            )
             success = await send_func(user_id, reminder_text)
-            
             if success:
-                # 标记为已发送
-                await self._call_mcp_tool(
-                    'mark_reminder_sent',
-                    reminder_id=reminder_id
+                await self._call_mcp_tool("mark_reminder_sent", reminder_id=reminder_id)
+                await self._schedule_next_occurrence_if_needed(
+                    memory_id=memory_id,
+                    current_reminder=reminder,
+                    payload=payload,
                 )
-                
-                logger.info(
-                    "reminder.sent", 
-                    reminder_id=reminder_id,
-                    user_id=user_id
-                )
+                logger.info("reminder.sent", reminder_id=reminder_id, user_id=user_id)
             else:
-                logger.warning(
-                    "reminder.send_failed",
-                    reminder_id=reminder_id,
-                    user_id=user_id
-                )
-        
-        except Exception as e:
+                logger.warning("reminder.send_failed", reminder_id=reminder_id, user_id=user_id)
+        except Exception as exc:
             logger.error(
                 "reminder.process_single_failed",
-                reminder_id=reminder.get('reminder_id'),
+                reminder_id=reminder.get("reminder_id"),
+                memory_id=reminder.get("memory_id"),
                 user_id=user_id,
-                error=str(e)
+                error=str(exc),
             )
-    
-    def _format_reminder_message(self, content: str, ai_understanding: dict) -> str:
-        """格式化提醒消息"""
+
+    async def _format_reminder_message(
+        self,
+        content: str,
+        ai_understanding: Dict[str, Any],
+        payload: Dict[str, Any],
+        user_id: str,
+    ) -> str:
+        """根据提醒类型和人员信息生成用户可读的提醒文案。"""
         try:
-            # 提取关键信息
-            reminder_type = ai_understanding.get('type', '')
-            person = ai_understanding.get('person', '')
-            event = ai_understanding.get('event', '')
-            
-            # 根据类型生成提醒
-            if reminder_type == 'vaccination':
+            reminder_type = ai_understanding.get("reminder_type")
+            person = ai_understanding.get("person_display") or payload.get("person_display")
+            if reminder_type == "vaccination":
                 if person:
                     return f"🏥 提醒：该给{person}打疫苗了！\n\n详情：{content}"
-                else:
-                    return f"🏥 疫苗提醒：{content}"
-            
-            elif reminder_type == 'medication':
+                return f"🏥 疫苗提醒：{content}"
+            if reminder_type == "medication":
                 if person:
                     return f"💊 用药提醒：记得给{person}吃药\n\n详情：{content}"
-                else:
-                    return f"💊 用药提醒：{content}"
-            
-            elif reminder_type == 'appointment':
+                return f"💊 用药提醒：{content}"
+            if reminder_type == "appointment":
                 return f"📅 预约提醒：{content}"
-            
-            elif reminder_type == 'task':
+            if reminder_type == "task":
                 return f"✅ 任务提醒：{content}"
-            
-            else:
-                # 通用提醒格式
-                return f"⏰ 提醒：{content}"
-                
-        except Exception:
-            # 回退到简单格式
             return f"⏰ 提醒：{content}"
-    
-    # =================== 初始化和清理 ===================
-    
-    async def initialize_mcp(self):
-        """初始化 MCP 客户端连接"""
-        try:
-            if self._http_client is None:
-                self._http_client = httpx.AsyncClient()
-            
-            response = await self._http_client.get(f"{self.mcp_url}/health", timeout=5.0)
-            if response.status_code == 200:
-                logger.info("mcp.connected", url=self.mcp_url)
-                self.mcp_client = True
-            else:
-                logger.warning("mcp.health_check.failed", status=response.status_code)
-                
-        except Exception as e:
-            logger.error("mcp.connection.failed", error=str(e))
-            self.mcp_client = None
-    
-    async def initialize_embedding_warmup(self):
-        """预热 embedding 模型"""
-        try:
-            logger.info("embedding.warmup.start")
-            success = await self.llm.warmup_embedding_model()
-            if success:
-                logger.info("embedding.warmup.success")
-            else:
-                logger.warning("embedding.warmup.failed")
-        except Exception as e:
-            logger.warning("embedding.warmup.error", error=str(e))
-    
-    async def close(self):
-        """关闭连接和清理资源"""
-        try:
-            if self._http_client is not None:
-                await self._http_client.aclose()
         except Exception:
-            pass
+            return f"⏰ 提醒：{content}"
+
+    async def _schedule_next_occurrence_if_needed(
+        self,
+        *,
+        memory_id: Optional[str],
+        current_reminder: Dict[str, Any],
+        payload: Dict[str, Any],
+    ) -> None:
+        """按照重复规则为循环提醒排下一次执行时间。"""
+        try:
+            if not memory_id or not isinstance(payload, dict):
+                return
+            rule = payload.get("repeat_rule")
+            if not isinstance(rule, dict):
+                return
+            remind_at = current_reminder.get("remind_at")
+            if not isinstance(remind_at, str):
+                return
+            next_dt = self._compute_next_remind_at(remind_at, rule, payload)
+            if next_dt is None:
+                return
+            next_payload = dict(payload)
+            next_payload["last_triggered_at"] = remind_at
+            args = {
+                "memory_id": memory_id,
+                "remind_at": next_dt.isoformat(),
+                "payload": next_payload,
+            }
+            ext_key = next_payload.get("external_key") or payload.get("external_key")
+            if isinstance(ext_key, str) and ext_key.strip():
+                args["external_key"] = ext_key.strip()
+            await self._call_mcp_tool("schedule_reminder", **args)
+        except Exception as exc:
+            logger.warning("reminder.reschedule_failed", memory_id=memory_id, error=str(exc))
+
+    def _compute_next_remind_at(
+        self,
+        previous_remind_at: str,
+        rule: Dict[str, Any],
+        payload: Dict[str, Any],
+    ) -> Optional[datetime]:
+        """根据重复规则计算下一次提醒时间。"""
+        base_dt = self._parse_reminder_time(previous_remind_at, payload.get("timezone"))
+        if base_dt is None:
+            return None
+        interval = rule.get("interval", 1)
+        try:
+            interval = max(1, int(interval))
+        except Exception:
+            interval = 1
+        frequency = (rule.get("frequency") or "").lower()
+        tz = payload.get("timezone") or rule.get("timezone")
+        zone = None
+        if isinstance(tz, str):
+            try:
+                zone = ZoneInfo(tz)
+            except Exception:
+                zone = None
+        if zone and base_dt.tzinfo is None:
+            base_dt = base_dt.replace(tzinfo=zone)
+        elif base_dt.tzinfo is None:
+            base_dt = base_dt.replace(tzinfo=ZoneInfo("UTC"))
+        if frequency == "daily":
+            next_dt = base_dt + timedelta(days=interval)
+            return self._apply_time_override(next_dt, rule)
+        if frequency == "weekly":
+            weekdays = self._normalize_weekdays(rule.get("weekday") or rule.get("weekdays"))
+            next_dt = base_dt + timedelta(days=1)
+            searched = 0
+            while searched < 14 * interval:
+                if weekdays and next_dt.weekday() in weekdays:
+                    break
+                if not weekdays and (next_dt - base_dt).days % interval == 0:
+                    break
+                next_dt += timedelta(days=1)
+                searched += 1
+            return self._apply_time_override(next_dt, rule)
+        if frequency == "monthly":
+            target_day = rule.get("day")
+            try:
+                target_day = int(target_day)
+            except Exception:
+                target_day = base_dt.day
+            year = base_dt.year
+            month = base_dt.month + interval
+            year += (month - 1) // 12
+            month = ((month - 1) % 12) + 1
+            last_day = calendar.monthrange(year, month)[1]
+            day = min(max(1, target_day), last_day)
+            next_dt = base_dt.replace(year=year, month=month, day=day)
+            return self._apply_time_override(next_dt, rule)
+        return None
+
+    def _parse_reminder_time(self, value: str, fallback_tz: Optional[str]) -> Optional[datetime]:
+        """解析提醒时间字符串，尽量补齐时区信息。"""
+        if not value:
+            return None
+        candidate = value.strip()
+        if not candidate:
+            return None
+        if candidate.endswith("Z"):
+            candidate = candidate[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(candidate)
+        except Exception:
+            return None
+        if dt.tzinfo is None and isinstance(fallback_tz, str):
+            try:
+                dt = dt.replace(tzinfo=ZoneInfo(fallback_tz))
+            except Exception:
+                dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        return dt
+
+    def _apply_time_override(self, dt: datetime, rule: Dict[str, Any]) -> datetime:
+        """在重复规则中手动覆盖提醒时间（hour/minute）。"""
+        time_str = rule.get("time")
+        if isinstance(time_str, str) and time_str:
+            parts = time_str.split(":")
+            try:
+                hour = int(parts[0])
+                minute = int(parts[1]) if len(parts) > 1 else 0
+                dt = dt.replace(hour=hour % 24, minute=minute % 60, second=0, microsecond=0)
+            except Exception:
+                pass
+        return dt
+
+    def _normalize_weekdays(self, value: Any) -> List[int]:
+        """将星期描述统一映射为 int（0=Monday）。"""
+        if value is None:
+            return []
+        if isinstance(value, int):
+            return [value % 7]
+        name_to_num = {
+            "monday": 0,
+            "tuesday": 1,
+            "wednesday": 2,
+            "thursday": 3,
+            "friday": 4,
+            "saturday": 5,
+            "sunday": 6,
+        }
+        results: List[int] = []
+        items = value if isinstance(value, list) else [value]
+        for item in items:
+            if isinstance(item, int):
+                results.append(item % 7)
+            elif isinstance(item, str):
+                key = item.strip().lower()
+                if key.isdigit():
+                    results.append(int(key) % 7)
+                elif key in name_to_num:
+                    results.append(name_to_num[key])
+        return results
+
+    # ------------------------------------------------------------------
+    # 媒体工具（沿用）
+    # ------------------------------------------------------------------
+
+    async def generate_signed_url(self, file_key: str, expires_in: int = 3600) -> str:
+        """生成带有效期的媒体访问地址。"""
+        try:
+            return await make_signed_url(file_key, expires_in=expires_in)
+        except Exception as exc:
+            logger.error("media.signed_url.failed", error=str(exc))
+            raise AIEngineError("生成签名地址失败", cause=exc)
 
 
-# 导出兼容性别名
+# 保持旧的别名
 AIEngine = AIEngineV2
-
-# 创建全局实例（保持向后兼容）
 ai_engine = AIEngineV2()
-
-# V2版本别名（如果需要的话）
 ai_engine_v2 = ai_engine

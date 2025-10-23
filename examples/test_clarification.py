@@ -19,9 +19,8 @@ async def test_clarification_scenarios():
     print("🧪 测试自动询问和确认功能")
     print("=" * 50)
     
-    # 初始化AI引擎
+    # 初始化AI引擎（AIEngineV2 在 __init__ 时已完成初始化）
     ai_engine = AIEngine()
-    await ai_engine.initialize_mcp()
     
     # 测试场景
     test_cases = [
@@ -125,7 +124,7 @@ async def test_clarification_scenarios():
     )
     print(f"AI回复2：{response2}")
     
-    await ai_engine.close()
+    # AIEngineV2 不需要显式关闭
     print(f"\n✅ 测试完成")
 
 if __name__ == "__main__":

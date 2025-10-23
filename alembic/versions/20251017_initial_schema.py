@@ -111,10 +111,13 @@ def upgrade():
         sa.Column('memory_id', postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column('remind_at', sa.DateTime(timezone=True), nullable=False),
         sa.Column('sent_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('payload', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column('external_key', sa.String(length=255), nullable=True),
         sa.ForeignKeyConstraint(['memory_id'], ['memories.id']),
     )
     op.create_index('ix_reminders_memory_id', 'reminders', ['memory_id'])
     op.create_index('ix_reminders_remind_at', 'reminders', ['remind_at'])
+    op.create_index('ix_reminders_external_key', 'reminders', ['external_key'])
     op.execute("CREATE INDEX idx_reminders_pending ON reminders (remind_at) WHERE sent_at IS NULL")
     
     # ========================================
@@ -216,6 +219,7 @@ def downgrade():
     
     # 删除记忆系统表
     op.drop_index('idx_reminders_pending', table_name='reminders')
+    op.drop_index('ix_reminders_external_key', table_name='reminders')
     op.drop_index('ix_reminders_remind_at', table_name='reminders')
     op.drop_index('ix_reminders_memory_id', table_name='reminders')
     op.drop_table('reminders')
@@ -248,4 +252,3 @@ def downgrade():
     op.execute("DROP TYPE IF EXISTS channel_type")
     
     print("✅ 数据库架构已清理")
-

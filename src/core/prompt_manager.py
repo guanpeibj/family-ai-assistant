@@ -19,6 +19,10 @@ logger = structlog.get_logger(__name__)
 FIELD_MAP = {
     'system_blocks': 'system',
     'understanding_blocks': 'understanding',
+    'dynamic_tools_intro': 'system',
+    'plan_blocks': 'planning',
+    'planning_tool_specs': 'planning',
+    'reflection_blocks': 'reflection',
     'response_blocks': 'response_generation',
     'response_clarification_blocks': 'response_clarification',
     'response_normal_blocks': 'response_normal',
@@ -29,6 +33,8 @@ FIELD_MAP = {
 DIRECT_FIELDS = {
     'system',
     'understanding',
+    'planning',
+    'reflection',
     'response_generation',
     'response_clarification',
     'response_normal',
@@ -39,6 +45,8 @@ DIRECT_FIELDS = {
 REQUIRED_FIELDS = {
     'system': '',
     'understanding': '',
+    'planning': '',
+    'reflection': '',
     'response_generation': '',
     'response_clarification': '',
     'response_normal': '',
@@ -197,7 +205,9 @@ class PromptManager:
                 'meta': {'name': 'fallback', 'description': 'minimal prompt'},
                 'components': {
                     'system': '你是一个家庭 AI 助手，帮助记录和检索家庭信息。',
-                    'understanding': '请输出 {"understanding": {...}, "context_requests": [], "tool_plan": {"steps": []}, "response_directives": {"profile": "default"}}',
+                    'understanding': '请分析用户需求并给出下一步动作。',
+                    'planning': '根据上下文输出 {"thought": "...", "action": "...", "tool": "...", "input": {...}, "expected_outcome": "...", "stop": false}',
+                    'reflection': '如果上一轮行动失败，请给出新的行动计划或终止理由。',
                     'response_generation': '根据执行结果生成简短确认回复。',
                     'response_clarification': '说明缺少的信息并提出一个问题。',
                     'response_normal': '用温和语气回复用户。',
@@ -243,13 +253,43 @@ class PromptManager:
         return components.get('system') or fallback
 
     def get_understanding_prompt(self, profile: Optional[str] = None) -> str:
-        """获取理解分析提示词（支持版本选择）"""
+        """兼容旧接口，返回理解/规划提示词。"""
         if profile and profile in self.prompts:
             components = self.prompts[profile].get('components', {})
-            return components.get('understanding', '')
+            return components.get('understanding') or components.get('planning', '')
         
         components = self._components_for_profile(profile)
-        return components.get('understanding', '')
+        return components.get('understanding') or components.get('planning', '')
+
+    def get_planning_prompt(self, profile: Optional[str] = None) -> str:
+        """获取单回合规划提示词。"""
+        if profile and profile in self.prompts:
+            components = self.prompts[profile].get('components', {})
+            return components.get('planning', '')
+
+        components = self._components_for_profile(profile)
+        return components.get('planning', '')
+
+    async def get_planning_prompt_with_tools(self, profile: Optional[str] = None) -> str:
+        """获取包含工具规格说明的规划提示词。"""
+        base_prompt = self.get_planning_prompt(profile)
+        if not base_prompt:
+            return base_prompt
+
+        tools = await self._fetch_mcp_tools()
+        tool_spec = self._format_tool_spec(tools)
+        if '{{DYNAMIC_TOOL_SPECS}}' in base_prompt:
+            return base_prompt.replace('{{DYNAMIC_TOOL_SPECS}}', tool_spec)
+        return f"{tool_spec}\n\n{base_prompt}" if tool_spec else base_prompt
+
+    def get_reflection_prompt(self, profile: Optional[str] = None) -> str:
+        """获取反思/验证提示词。"""
+        if profile and profile in self.prompts:
+            components = self.prompts[profile].get('components', {})
+            return components.get('reflection', '')
+        
+        components = self._components_for_profile(profile)
+        return components.get('reflection', '')
 
     def get_response_prompt(self, profile: Optional[str] = None) -> str:
         """获取响应生成提示词（支持版本选择）"""

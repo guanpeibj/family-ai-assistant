@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "阿福 (Family AI Assistant)"
     APP_ENV: str = Field(default="development", pattern="^(development|production|test)$")
     DEBUG: bool = Field(default=True)
+    DEFAULT_TIMEZONE: str = Field(default="Asia/Shanghai", description="Primary timezone used for runtime context")
     
     # 数据库
     DATABASE_URL: PostgresDsn
@@ -25,6 +26,7 @@ class Settings(BaseSettings):
     THREEMA_SECRET: str | None = Field(default=None, description="Threema Gateway Secret")
     THREEMA_PRIVATE_KEY: str = Field(default="", description="Threema private key (hex encoded)")
     THREEMA_WEBHOOK_URL: str = Field(default="", description="Public URL for Threema webhook")
+    THREEMA_FAMILY_GROUP_ID: str | None = Field(default=None, description="Threema family group ID for 群发提醒")
     
     # LLM 配置（支持 OpenAI 兼容/国内厂商兼容）
     # Provider 选择：openai/kimi/qwen/doubao/deepseek/anthropic
@@ -51,6 +53,9 @@ class Settings(BaseSettings):
     # 向量提供方（默认使用本地开源 fastembed）
     EMBED_PROVIDER: str = Field(default="local_fastembed", description="embedding 提供方：local_fastembed/openai_compatible")
     FASTEMBED_MODEL: str = Field(default="BAAI/bge-small-zh-v1.5", description="fastembed 本地向量模型名")
+
+    # 上下文策略
+    CONTEXT_POLICY_FILE: str = Field(default="config/context_policy.yaml", description="上下文裁剪策略文件路径")
     
     # Anthropic（可选）
     ANTHROPIC_API_KEY: str = Field(default="", description="Anthropic API Key，可选")

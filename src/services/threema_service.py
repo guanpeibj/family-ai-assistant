@@ -11,6 +11,7 @@ from typing import Optional, Dict, Any
 import hashlib
 import hmac
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from src.core.config import settings
 from src.core.logging import get_logger
@@ -56,6 +57,24 @@ class ThreemaService:
             sender_id = webhook_data['from']
             nonce = bytes.fromhex(webhook_data['nonce'])
             box_data = bytes.fromhex(webhook_data['box'])
+            timestamp_raw = webhook_data.get('date')
+            timestamp_value: Optional[int] = None
+            message_utc_iso = None
+            message_local_iso = None
+            if timestamp_raw is not None:
+                try:
+                    ts_int = int(timestamp_raw)
+                    timestamp_value = ts_int
+                    utc_dt = datetime.fromtimestamp(ts_int, tz=ZoneInfo("UTC"))
+                    message_utc_iso = utc_dt.isoformat()
+                    tz_name = getattr(settings, "DEFAULT_TIMEZONE", "Asia/Shanghai")
+                    try:
+                        local_zone = ZoneInfo(tz_name)
+                    except Exception:
+                        local_zone = ZoneInfo("UTC")
+                    message_local_iso = utc_dt.astimezone(local_zone).isoformat()
+                except Exception:
+                    pass
             
             # 获取发送者公钥
             sender_public_key = await self._get_public_key(sender_id)
@@ -69,7 +88,9 @@ class ThreemaService:
                 'channel': 'threema',
                 'sender_id': sender_id,
                 'nickname': webhook_data.get('nickname'),
-                'timestamp': int(webhook_data['date']),
+                'timestamp': timestamp_value,
+                'message_sent_at_iso': message_local_iso,
+                'message_sent_at_utc': message_utc_iso,
                 'raw_content': decrypted.decode('utf-8', errors='replace'),
                 'message_id': webhook_data['messageId'],
                 # AI 可能需要的其他信息都保留
@@ -136,6 +157,14 @@ class ThreemaService:
                 'channel': 'threema',
                 'to': to_id
             }
+
+    async def send_group_message(self, content: str) -> Dict[str, Any]:
+        """发送消息到预配置的家庭群"""
+        group_id = settings.THREEMA_FAMILY_GROUP_ID
+        if not group_id:
+            logger.warning("threema.group_id_missing")
+            return {'success': False, 'error': 'group_id_not_configured'}
+        return await self.send_message(group_id, content)
 
     async def send_file(self, to_id: str, file_bytes: bytes, filename: str, content_type: str) -> Dict[str, Any]:
         """

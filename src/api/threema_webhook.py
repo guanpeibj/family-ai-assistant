@@ -9,11 +9,13 @@ import uuid
 from datetime import datetime
 import asyncio
 import structlog
+from zoneinfo import ZoneInfo
 
 from src.services.threema_service import threema_service
 from src.services.engine_provider import ai_engine
 from src.db.database import get_db
 from src.db.models import UserChannel
+from src.core.config import settings
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/webhook", tags=["webhooks"])
@@ -58,7 +60,6 @@ async def receive_threema_message(
         saved_attachments: List[Dict[str, Any]] = []
         try:
             if attachments:
-                from src.core.config import settings
                 media_root = settings.MEDIA_ROOT
                 now = datetime.now()
                 base_dir = os.path.join(media_root, now.strftime("%Y"), now.strftime("%m"))
@@ -123,6 +124,14 @@ async def receive_threema_message(
         context['thread_id'] = decrypted.get('sender_id') or from_
         if saved_attachments:
             context['attachments'] = saved_attachments
+        tz_name = getattr(settings, "DEFAULT_TIMEZONE", "Asia/Shanghai")
+        try:
+            local_zone = ZoneInfo(tz_name)
+        except Exception:
+            local_zone = ZoneInfo("UTC")
+        received_utc = datetime.now(ZoneInfo("UTC"))
+        context['webhook_received_at_utc'] = received_utc.isoformat()
+        context['webhook_received_at_iso'] = received_utc.astimezone(local_zone).isoformat()
         response = await ai_engine.process_message(
             content=context.get('raw_content', ''),
             user_id=user_id,
@@ -204,12 +213,33 @@ async def send_to_threema_user(user_id: str, content: str) -> bool:
             if not user_channel:
                 logger.warning(f"No Threema channel found for user {user_id}")
                 return False
-            
-            threema_id = user_channel['channel_user_id']
-            send_result = await threema_service.send_message(threema_id, content)
-            
-            return send_result['success']
-            
+        
+        threema_id = user_channel['channel_user_id']
+        send_result = await threema_service.send_message(threema_id, content)
+        
+        return send_result['success']
+        
     except Exception as e:
         logger.error(f"Error sending to Threema user: {e}")
         return False 
+
+
+async def send_to_threema_group(user_id: str, content: str) -> bool:
+    """
+    发送消息到家庭群，如群不可用则回退至单聊
+    """
+    try:
+        group_result = await threema_service.send_group_message(content)
+        if group_result.get('success'):
+            return True
+        logger.warning(
+            "threema.group_send_failed",
+            error=group_result.get('error'),
+            fallback_user=user_id
+        )
+    except Exception as e:
+        logger.error("threema.group_send.exception", error=str(e))
+    
+    if user_id:
+        return await send_to_threema_user(user_id, content)
+    return False

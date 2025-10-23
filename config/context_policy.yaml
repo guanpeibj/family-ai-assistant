@@ -1,0 +1,43 @@
+budgets:
+  base_token_budget: 1800        # 单轮基础可用 token 预算
+  per_round_increment: 600       # 每追加一轮可额外使用的 token
+  max_token_budget: 5400         # 单轮最多可占用的 token
+
+light_context:
+  limit: 6                       # 最近记忆条目数
+  char_limit: 240                # 单条预览长度
+
+household:
+  members_limit: 6               # 家庭成员摘要条数
+  tag_limit: 3                   # 每位成员的标签数
+
+dynamic_defaults:
+  mode: lossless                 # 默认使用 lossless，原样传递工具结果
+  item_limit: 3                  # 字典/列表摘要（用于 lossless 预览和元数据）
+  char_limit: 220                # 字符串裁剪长度（仅用于预览）
+  preview_chars: 200             # Manifest 预览长度
+
+dynamic_keys:
+  expense_category_config:
+    mode: lossless               # 保留原始数据，供 LLM 按需拉取
+    preview_chars: 220
+    priority: 0
+  thread_summary:
+    mode: summary
+    item_limit: 1
+    char_limit: 400
+    priority: 2
+  request_meta:
+    mode: summary
+    item_limit: 1
+    char_limit: 280
+    priority: 3
+  budget_snapshot:
+    mode: lossless
+    preview_chars: 220
+    priority: 6
+  reminders_queue:
+    mode: summary
+    item_limit: 5
+    char_limit: 260
+    priority: 10

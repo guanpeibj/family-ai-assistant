@@ -141,6 +141,8 @@ class Reminder(Base):
     memory_id = Column(UUID(as_uuid=True), ForeignKey('memories.id'), index=True)  # 关联的记忆（外键）
     remind_at = Column(DateTime(timezone=True), nullable=False, index=True)
     sent_at = Column(DateTime(timezone=True))  # 发送时间，NULL表示未发送
+    payload = Column(JSONB, nullable=True)  # AI 提供的补充信息（scope/person/message模板等）
+    external_key = Column(String(255), nullable=True, index=True)  # 可选的幂等键（由AI传入）
     
     __table_args__ = (
         Index('idx_reminders_pending', 'remind_at', postgresql_where=(sent_at.is_(None))),

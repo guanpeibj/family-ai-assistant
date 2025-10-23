@@ -321,6 +321,7 @@ reminder:
       should_store: true
       expected_data:
         type: "reminder_request"
+      expect_reminder: true
 
   - test_id: "TC022"
     test_name: "创建重复提醒"
@@ -333,6 +334,7 @@ reminder:
       response_should: "确认重复提醒已设置"
     data_verification:
       should_store: true
+      expect_reminder: true
 
   - test_id: "TC023"
     test_name: "查询提醒"
@@ -832,6 +834,7 @@ multi_turn_tests:
           should_store: true
           expected_data:
             type: "reminder"
+          expect_reminder: true
       
       - turn: 2
         user_input: "学校通知，改到下周五了"
@@ -841,6 +844,7 @@ multi_turn_tests:
           response_should: "确认时间已修改"
         data_verification:
           should_store: true  # 应该更新记录
+          expect_reminder: true
       
       - turn: 3
         user_input: "大女儿家长会是哪天？"

@@ -42,7 +42,7 @@ async def test_config_in_memories():
     print("测试2：配置存储验证")
     print("=" * 60)
     
-    await ai_engine.initialize_mcp()
+    # AIEngineV2 在 __init__ 时已完成初始化
     
     result = await ai_engine._call_mcp_tool(
         'search',
@@ -181,7 +181,8 @@ async def main():
         print()
         return 1
     finally:
-        await ai_engine.close()
+        # AIEngineV2 不需要显式关闭
+        pass
 
 
 if __name__ == "__main__":

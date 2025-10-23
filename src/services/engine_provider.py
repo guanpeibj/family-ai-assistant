@@ -13,15 +13,14 @@ _initialized = False
 
 
 async def initialize_ai_engine() -> None:
-    """确保 AIEngine 初始化一次，包括 MCP 连接与向量热身"""
+    """确保 AIEngine 初始化一次"""
     global _initialized
     if _initialized:
         return
     async with _startup_lock:
         if _initialized:
             return
-        await ai_engine.initialize_mcp()
-        await ai_engine.initialize_embedding_warmup()
+        # AIEngineV2 在 __init__ 中已完成初始化
         _initialized = True
 
 
@@ -30,5 +29,5 @@ async def shutdown_ai_engine() -> None:
     global _initialized
     if not _initialized:
         return
-    await ai_engine.close()
+    # AIEngineV2 不需要显式关闭
     _initialized = False

@@ -50,6 +50,7 @@ services:
       - ./examples:/app/examples
       - ./tests:/app/tests
       - ./data:/app/data
+      - ./config:/app/config
       - ./prompts:/app/prompts
       - ./alembic:/app/alembic
       - ./family_private_data.json:/app/family_private_data.json:ro

@@ -76,9 +76,7 @@ class IntegrationTestBase:
         logger.info("test_setup_start", suite=self.test_suite_name)
         
         try:
-            # 初始化AI引擎
-            if ai_engine.mcp_client is None:
-                await ai_engine.initialize_mcp()
+            # AIEngineV2 在 __init__ 时已完成初始化
             
             # 清理旧数据
             await self._cleanup_test_data()

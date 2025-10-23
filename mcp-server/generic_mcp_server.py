@@ -6,10 +6,11 @@ import asyncio
 import json
 import os
 from typing import Dict, List, Any, Optional, Union
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 import os
 import io
+from zoneinfo import ZoneInfo
 
 # 延迟导入 MCP 相关模块，避免在 HTTP 模式下因版本差异报错
 import asyncpg
@@ -688,25 +689,99 @@ class GenericMCPServer:
         except Exception as e:
             return {"success": False, "error": str(e)}
     
-    async def _schedule_reminder(self, memory_id: str, remind_at: str) -> Dict[str, Any]:
+    def _parse_remind_at(self, remind_at: str, payload: Optional[Dict[str, Any]]) -> Optional[datetime]:
+        """容错解析提醒时间字符串，默认回落到 UTC"""
+        if not remind_at:
+            return None
+        candidate = remind_at.strip()
+        if not candidate:
+            return None
+        if candidate.endswith('Z'):
+            candidate = candidate[:-1] + '+00:00'
+        tz: Optional[ZoneInfo] = None
+        if isinstance(payload, dict):
+            tz_name = payload.get('timezone') or payload.get('tz')
+            if isinstance(tz_name, str):
+                try:
+                    tz = ZoneInfo(tz_name)
+                except Exception:
+                    tz = None
+        try:
+            dt = datetime.fromisoformat(candidate)
+        except Exception:
+            dt: Optional[datetime] = None
+            for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+                try:
+                    dt = datetime.strptime(candidate, fmt)
+                    break
+                except Exception:
+                    dt = None
+            if dt is None:
+                return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=tz or timezone.utc)
+        return dt
+
+    async def _schedule_reminder(
+        self,
+        memory_id: str,
+        remind_at: str,
+        payload: Optional[Dict[str, Any]] = None,
+        external_key: Optional[str] = None
+    ) -> Dict[str, Any]:
         """为某个记忆设置提醒"""
         try:
+            target_time = self._parse_remind_at(remind_at, payload)
+            if target_time is None:
+                return {"success": False, "error": "invalid_remind_at"}
+            normalized_key = external_key.strip() if isinstance(external_key, str) and external_key.strip() else None
             async with self.pool.acquire() as conn:
+                if normalized_key:
+                    existing = await conn.fetchrow(
+                        """
+                        SELECT id FROM reminders
+                        WHERE external_key = $1 AND sent_at IS NULL
+                        LIMIT 1
+                        """,
+                        normalized_key
+                    )
+                    if existing:
+                        await conn.execute(
+                            """
+                            UPDATE reminders
+                            SET remind_at = $1,
+                                payload = $2
+                            WHERE id = $3
+                            """,
+                            target_time,
+                            payload,
+                            existing['id']
+                        )
+                        return {
+                            "success": True,
+                            "reminder_id": str(existing['id']),
+                            "remind_at": target_time.isoformat(),
+                            "upsert": True
+                        }
+
                 reminder_id = await conn.fetchval(
                     """
-                    INSERT INTO reminders (id, memory_id, remind_at)
-                    VALUES ($1, $2, $3)
+                    INSERT INTO reminders (id, memory_id, remind_at, payload, external_key)
+                    VALUES ($1, $2, $3, $4, $5)
                     RETURNING id
                     """,
                     uuid.uuid4(),
                     uuid.UUID(memory_id),
-                    datetime.fromisoformat(remind_at)
+                    target_time,
+                    payload,
+                    normalized_key
                 )
                 
                 return {
                     "success": True,
                     "reminder_id": str(reminder_id),
-                    "remind_at": remind_at
+                    "remind_at": target_time.isoformat(),
+                    "upsert": False
                 }
                 
         except Exception as e:
@@ -722,7 +797,8 @@ class GenericMCPServer:
                 rows = await conn.fetch(
                     """
                     SELECT r.id as reminder_id, r.remind_at, 
-                           m.content, m.ai_understanding
+                           r.memory_id,
+                           m.content, m.ai_understanding, r.payload
                     FROM reminders r
                     JOIN memories m ON r.memory_id = m.id
                     WHERE m.user_id = $1 
@@ -737,8 +813,10 @@ class GenericMCPServer:
                     {
                         "reminder_id": str(row['reminder_id']),
                         "remind_at": row['remind_at'].isoformat(),
+                        "memory_id": str(row['memory_id']),
                         "content": row['content'],
-                        "ai_understanding": json.loads(row['ai_understanding'])
+                        "ai_understanding": json.loads(row['ai_understanding']),
+                        "payload": row['payload']
                     }
                     for row in rows
                 ]
@@ -771,6 +849,25 @@ class GenericMCPServer:
                 "success": False,
                 "error": str(e)
             }
+
+    async def _list_reminder_user_ids(self) -> Dict[str, Any]:
+        """列出仍有未发送提醒的用户ID"""
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT DISTINCT m.user_id
+                    FROM reminders r
+                    JOIN memories m ON r.memory_id = m.id
+                    WHERE r.sent_at IS NULL
+                    """
+                )
+                return {
+                    "success": True,
+                    "user_ids": [str(row['user_id']) for row in rows if row['user_id']]
+                }
+        except Exception as e:
+            return {"success": False, "error": str(e), "user_ids": []}
 
     async def _batch_store(self, memories: List[Dict[str, Any]]) -> Dict[str, Any]:
         """批量存储记忆。每项: {content, ai_data, user_id, embedding?}"""

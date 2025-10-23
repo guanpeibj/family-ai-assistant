@@ -18,7 +18,11 @@ from ..services.engine_provider import (
     initialize_ai_engine,
     shutdown_ai_engine,
 )
-from .threema_webhook import router as threema_router, send_to_threema_user
+from .threema_webhook import (
+    router as threema_router,
+    send_to_threema_user,
+    send_to_threema_group,
+)
 
 logger = get_logger(__name__)
 
@@ -35,7 +39,7 @@ async def reminder_task():
     while True:
         try:
             # 使用 Threema 作为默认提醒渠道
-            await ai_engine.check_and_send_reminders(send_to_threema_user)
+            await ai_engine.check_and_send_reminders(send_to_threema_group)
         except Exception as e:
             logger.error(f"Reminder task error: {e}")
         # 每分钟检查一次

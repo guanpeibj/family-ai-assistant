@@ -401,17 +401,28 @@ class DataValidator:
                     score_data["score"] += 3
                     score_data["details"]["relations"] = "✅ 有thread_id"
                 else:
-                    score_data["score"] += 2
+                    score_data["score"] += 2  # 缺少 thread_id，给部分分
                     score_data["details"]["relations"] = "⚠️ 无thread_id"
                 
-                # AI扩展 (2分)
+                # AI扩展 (1分)
                 extra_fields = [k for k in ai_data.keys() if k not in required_fields]
                 if len(extra_fields) >= 2:
-                    score_data["score"] += 2
+                    score_data["score"] += 1
                     score_data["details"]["ai_extensions"] = f"✅ {len(extra_fields)}个扩展"
                 else:
-                    score_data["score"] += 1
                     score_data["details"]["ai_extensions"] = "⚠️ 扩展较少"
+                
+                # 提醒校验 (1分，可选)
+                if expected.get("expect_reminder"):
+                    reminder_ok = await self._check_reminder_created(memory.id)
+                    if reminder_ok:
+                        score_data["score"] += 1
+                        score_data["details"]["reminder"] = "✅ 已创建提醒"
+                    else:
+                        score_data["details"]["reminder"] = "❌ 未找到提醒"
+                        score_data["issues"].append("未创建提醒任务")
+                else:
+                    score_data["score"] += 1  # 保持满分结构
                     
         except Exception as e:
             score_data["issues"].append(f"结构验证失败: {str(e)}")
@@ -439,3 +450,15 @@ class DataValidator:
             score_data["issues"].append(f"幂等性验证失败: {str(e)}")
             
         return score_data
+
+    async def _check_reminder_created(self, memory_id: uuid.UUID) -> bool:
+        """检查指定记忆是否已有待发送提醒"""
+        try:
+            async with get_session() as session:
+                query = select(Reminder).where(Reminder.memory_id == memory_id)
+                result = await session.execute(query)
+                reminder = result.scalars().first()
+                return reminder is not None
+        except Exception as e:
+            logger.warning("data_validator.reminder_check_failed", error=str(e))
+            return False

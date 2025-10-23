@@ -41,7 +41,7 @@ class BudgetTester:
         logger.info("test_setup_start")
         
         try:
-            await ai_engine.initialize_mcp()
+            # AIEngineV2 在 __init__ 时已完成初始化
             logger.info("test_setup_complete")
             return True
         except Exception as e:
@@ -304,8 +304,8 @@ async def main():
         print(f"❌ 测试异常：{e}")
         return 1
     finally:
-        # 清理
-        await ai_engine.close()
+        # AIEngineV2 不需要显式关闭
+        pass
 
 
 if __name__ == "__main__":

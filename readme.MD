@@ -80,6 +80,34 @@ FFA应该支持 记忆和查询 家庭成员基本信息、家庭全年 日程�
 
 现在数据库里已经引入 `family_households / family_members / family_member_accounts` 三张极简结构表，用来描述一户家庭下的全部成员。成年人可以通过 `users`+`user_channels` 关联到成员节点，孩子或没有账号的成员则只需要维护 `family_members` 行即可。AI 仍然主导记忆结构，但在需要聚合/筛选时可以利用这些表给出的 `user_id` 列表来覆盖整个家庭或特定成员。
 
+### AI 引擎工作流（统一循环版）
+
+- **单循环 Plan→Act→Observe**：AI 在每轮中输出 JSON（thought/action/input），工程层只负责执行工具或补充上下文，再把 observation 写回下一轮，直到 LLM 主动 `finalize`。
+- **上下文预算**：ContextManager 根据回合数裁剪 `light_context`、家庭成员和动态数据，Manifest 告知还可请求的键；AI 通过 `fetch_context` 主动索取新增数据。
+- **工具调用**：LLM 直接决定调用何种 MCP 工具与参数；若失败，下一轮在 thought 中总结原因并调整策略，必要时以 `clarify` 结束并提问。
+- **线程工作记忆**：LLM 在 `memory_record.extra.thread_scratchpad` 中维护该线程的最新主题、最近事务与待办，工程层会同步到 `thread_summary` 记录，后续回合可直接引用。
+- **说话者与实体标签**：`light_context` 附带 `speaker`/`speaker_display`，`memory_record` 必须给出结构化实体与置信度，方便后续检索与更新。
+- **最终回复契约**：最后一次调用要求输出 `{reply, memory_record, followups, status}`，工程层根据 `memory_record.should_store` 与 scratchpad 自动持久化，`reply` 直接返回用户。
+- **记账类目约束**：Prompt 针对支出场景要求在调用工具前查询 `expense_category_config`，严格匹配一级/二级类目和 `alias`，若无匹配必须提示用户更新配置。
+- **工具可见性**：系统与规划提示会动态注入 MCP 工具列表与参数规格，LLM 必须按提示词中的签名调用，每次规划前都能看到最新接口状态。
+- **多任务拆解**：LLM 在 thought 中维护 `Tasks:` 清单，逐项执行并同步 thread_scratchpad/pendings，确保多目标对话井然有序。
+- **工程职责**：除了上下文裁剪与工具桥接，仅保留安全兜底（超时、错误回退、提醒发送等），保证架构简洁可扩展。
+
+### 日志与可观测性
+
+- `agent.loop.context_snapshot`：记录每回合上下文预算使用情况（轻量记忆条数、家庭成员计数、动态键列表）。
+- `agent.loop.plan_parsed`：展示 LLM 规划出的动作、关联工具、预期结果与 stop 标记。
+- `agent.loop.observation_recorded`：归档执行后的观测摘要（成功与否、终止标记、是否更新上下文）。
+- `agent.final.*`：包含最终汇总回合请求与成功事件，便于排查回复长度、followups 数量以及记忆写入开关。
+- `store.thread_summary.upserted / store.thread_summary.failed`：记录线程工作记忆的同步结果，确保补充信息能在下一轮被引用。
+- 其他关键日志（工具成功/失败、上下文请求、回退路径）同样保持英文，方便集中收集至 APM/Logging 平台。
+
+### 上下文记忆策略
+
+- 每次对话都会写入 `chat_turn` 记录，包含 `speaker`、`intent`、关键实体等结构化信息，供 `light_context` 快速读取。
+- 若 LLM 输出 `thread_scratchpad`，引擎会将其保存为 `thread_summary`（按 `thread_id` 幂等更新），ContextManager 会在下次请求时自动注入。
+- 当用户追加或更正信息时，Prompt 要求先从 `thread_summary` 或近期记录中检索再决定操作，避免重复创建或遗忘上文。
+
 2. Prompt 编排全部集中在 `prompts/family_assistant_prompts.yaml`，后续扩展只需改 YAML 而无需改代码。
 
 3. FAA应该包括一个可以接LLM api的组件，可能访问openai api / claude api / gemini api 等。由ai来决定这些重要问题：解析我和妻子的命令、是否存信息库以及如何存、是否查信息库以及如何查、已获得的信息如何给我们反馈。以上这些，尽量都交由ai决定，尽量少由代码和工程预定逻辑。
@@ -96,6 +124,19 @@ python 3.12.11，openai 1.90.0，uv，MCP，PostgreSQL + pgvector， FastAPI
 成本考虑，暂定都部署在 一个linux 云服务器，使用docker-compose管理，使用cursor开发，使用anysphere.remote-containers扩展来开发
 
 应该具备简单的CICD能力，项github仓库提交代码，应该支持一键部署到目标云服务器，节省时间。
+
+## 引擎设计更新
+
+### Lossless Context Manifest
+- Plan-Act 循环现在使用 manifest 描述上下文预算：每个动态键都会注明 `mode`、token 预算与 `ref`。对 `lossless` 键（如 `expense_category_config`），LLM 只能看到预览，必须通过 `fetch_context` + `kind="context_ref"` 拉取完整数据，彻底避免被截断的配置导致的幻觉。
+- 历史 observation 追加了 `ref`，需要细节时使用 `kind="observation_ref"` 重放原始工具结果，日志仍保持精简。
+- 上下文裁剪策略抽离到 `config/context_policy.yaml`，可按家庭需求配置 `lossless`/`summary`、优先级和 token 预算；工程代码不再写死阈值，遵循“AI 驱动 + prompt 编排”的理念。
+- 工具查询（搜索类、预算、健康等）成功后会自动写入上下文的 lossless 视图，并把完整 `data` 直接提供给下一轮 LLM，确保不再依赖截断预览或重复查询。
+
+### 快速响应路径
+- LLM 可以在 `respond`/`finalize` 动作中直接给出 `reply`、`memory_record` 和 `followups`，引擎会立即返回结果，省去额外的总结调用，简单问题响应更快。
+- 每轮循环都会记录 `context_build_ms`、`planning_llm_ms` 等指标，并写入 `AgentState.metadata.timings`，便于后续分析慢路径和优化提示词。
+- `get_basic_context` 并发加载轻量记忆、家庭信息和线程摘要，家庭结构支持 60 秒缓存，减轻后端压力。
 
 
 ## 其他

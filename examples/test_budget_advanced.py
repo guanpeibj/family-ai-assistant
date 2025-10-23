@@ -289,8 +289,7 @@ async def main():
     print("╚" + "═"*58 + "╝")
     
     try:
-        # 初始化
-        await ai_engine.initialize_mcp()
+        # AIEngineV2 在 __init__ 时已完成初始化
         print("\n✓ AI引擎初始化完成\n")
         
         # 执行高级测试
@@ -331,7 +330,8 @@ async def main():
         print(f"\n❌ 测试异常：{e}\n")
         return 1
     finally:
-        await ai_engine.close()
+        # AIEngineV2 不需要显式关闭
+        pass
 
 
 if __name__ == "__main__":

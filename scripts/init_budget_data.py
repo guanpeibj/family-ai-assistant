@@ -258,12 +258,8 @@ async def initialize_budgets():
     user_id = config['user_id']
     expense_config = config['expense_config']
     
-    # 2. 确保 AI 引擎已初始化
-    try:
-        await ai_engine.initialize_mcp()
-        logger.info("ai_engine_initialized")
-    except Exception as e:
-        logger.warning("ai_engine_init_warning", error=str(e))
+    # 2. AIEngineV2 在 __init__ 时已完成初始化
+    logger.info("ai_engine_initialized")
     
     # 3. 创建费用类目配置记录（第一步：让AI知道类目体系）
     logger.info("creating_expense_categories_config")
@@ -397,8 +393,8 @@ async def main():
         print()
         return 1
     finally:
-        # 清理资源
-        await ai_engine.close()
+        # AIEngineV2 不需要显式关闭
+        pass
 
 
 if __name__ == "__main__":

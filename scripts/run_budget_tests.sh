@@ -185,7 +185,7 @@ sys.exit(0 if result else 1)
 import asyncio
 from src.ai_engine import ai_engine
 async def check():
-    await ai_engine.initialize_mcp()
+    # AIEngineV2 在 __init__ 时已完成初始化
     result = await ai_engine._call_mcp_tool('search',
         query='', user_id='family_default',
         filters={'jsonb_equals': {'type': 'budget'}, 'limit': 10})
@@ -201,7 +201,7 @@ async def check():
         print(f'  • {period}: 总预算 ¥{total}')
         print(f'    类目数：{len(cats)}')
     
-    await ai_engine.close()
+    # AIEngineV2 不需要显式关闭
 asyncio.run(check())
     "
     ;;
