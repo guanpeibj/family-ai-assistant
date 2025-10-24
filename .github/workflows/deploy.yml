@@ -1,53 +1,83 @@
-name: Deploy to Server
+name: Deploy FAA to Production
 
 on:
   push:
-    branches: [master]
-  workflow_dispatch:
+    branches: [main, master]
+  workflow_dispatch:  # 支持手动触发
+    inputs:
+      skip_tests:
+        description: '跳过测试直接部署'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 jobs:
-  deploy:
+  test:
     runs-on: ubuntu-latest
-    
+    if: github.event.inputs.skip_tests != 'true'
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Create deploy configuration
-      run: |
-        cat > deploy-config.json << 'EOF'
-        {
-          "timestamp": "${{ github.event.head_commit.timestamp }}",
-          "commit": "${{ github.sha }}",
-          "env": {
-            "POSTGRES_PASSWORD": "${{ secrets.POSTGRES_PASSWORD }}",
-            "DATABASE_URL": "postgresql://faa:${{ secrets.POSTGRES_PASSWORD }}@postgres:5432/family_assistant",
-            "OPENAI_API_KEY": "${{ secrets.OPENAI_API_KEY }}",
-            "OPENAI_MODEL": "gpt-4-turbo-preview",
-            "THREEMA_GATEWAY_ID": "${{ secrets.THREEMA_GATEWAY_ID }}",
-            "THREEMA_SECRET": "${{ secrets.THREEMA_SECRET }}",
-            "THREEMA_PRIVATE_KEY": "${{ secrets.THREEMA_PRIVATE_KEY }}",
-            "THREEMA_WEBHOOK_URL": "${{ secrets.THREEMA_WEBHOOK_URL }}",
-            "SECRET_KEY": "${{ secrets.SECRET_KEY }}",
-            "APP_ENV": "production",
-            "LOG_LEVEL": "INFO"
-          },
-          "family_data": ${{ secrets.FAMILY_DATA_JSON }}
-        }
-        EOF
-    
-    - name: Commit deploy configuration
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git add deploy-config.json
-        git commit -m "🚀 Deploy configuration - $(date)"
-        git push
-    
-    - name: Deployment triggered
-      run: |
-        echo "✅ 部署配置已创建并推送"
-        echo "服务器将在1分钟内自动检测并部署"
-        echo "查看部署日志: tail -f /var/log/faa.log"
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt || echo "继续执行（测试可选）"
+
+      - name: 运行 linter（可选）
+        run: |
+          pip install ruff || true
+          ruff check src/ || echo "Linting 跳过"
+        continue-on-error: true
+
+  deploy:
+    needs: [test]
+    if: always() && (needs.test.result == 'success' || needs.test.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: 部署到服务器
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            set -e
+            cd /opt/faa/family-ai-assistant
+            
+            echo "🚀 开始部署 FAA..."
+            echo "当前提交: ${{ github.sha }}"
+            
+            # 执行部署脚本
+            /opt/faa/scripts/deploy.sh
+            
+            echo "✅ 部署完成！"
+
+      - name: 发送成功通知
+        if: success()
+        run: |
+          curl -X POST "https://msgapi.threema.ch/send_simple" \
+            -d "from=${{ secrets.THREEMA_BOT_ID }}" \
+            -d "to=${{ secrets.THREEMA_ADMIN_ID }}" \
+            -d "secret=${{ secrets.THREEMA_SECRET }}" \
+            -d "text=✅ FAA 部署成功！提交: ${{ github.sha }}（前7位：${GITHUB_SHA:0:7}）" || true
+
+      - name: 发送失败通知
+        if: failure()
+        run: |
+          curl -X POST "https://msgapi.threema.ch/send_simple" \
+            -d "from=${{ secrets.THREEMA_BOT_ID }}" \
+            -d "to=${{ secrets.THREEMA_ADMIN_ID }}" \
+            -d "secret=${{ secrets.THREEMA_SECRET }}" \
+            -d "text=❌ FAA 部署失败！提交: ${{ github.sha }}（前7位：${GITHUB_SHA:0:7}）请检查日志。" || true

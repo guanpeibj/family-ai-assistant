@@ -22,3 +22,12 @@ backup/
 # 个人配置
 .env.local
 .env.*.local
+
+# Docker Compose 本地覆盖配置（每个开发者可有自己的配置）
+docker-compose.override.yml
+
+# 本地日志
+logs/
+*.log
+
+todo.md

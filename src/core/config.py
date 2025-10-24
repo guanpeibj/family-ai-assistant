@@ -84,7 +84,11 @@ class Settings(BaseSettings):
     
     # 日志与成本追踪
     LOG_LEVEL: str = Field(default="INFO", pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
+    LOG_DIR: str = Field(default="", description="日志文件目录，为空则不写入文件（仅stdout）")
     ENABLE_USAGE_TRACKING: bool = Field(default=True, description="启用LLM成本追踪")
+    
+    # 缓存路径
+    FASTEMBED_CACHE_PATH: str = Field(default="/data/fastembed_cache", description="FastEmbed模型缓存路径")
     
     @property
     def is_production(self) -> bool:

@@ -31,6 +31,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import structlog
+import tiktoken
 from pydantic import BaseModel, Field, ValidationError
 
 from .core.ab_testing import ExperimentResult, ab_testing_manager, get_experiment_version
@@ -1142,6 +1143,14 @@ class AIEngineV2:
 
         self.agent_max_turns = getattr(settings, "AGENT_MAX_TURNS", 3)
 
+        # 初始化 tiktoken encoder（用于准确计算 token 数量）
+        # cl100k_base 适用于 gpt-4, gpt-3.5-turbo, text-embedding-ada-002 等模型
+        try:
+            self.token_encoder = tiktoken.get_encoding("cl100k_base")
+        except Exception as e:
+            logger.warning("tiktoken_init_failed", error=str(e))
+            self.token_encoder = None
+
     async def process_message(self, content: str, user_id: str, context: Optional[Dict[str, Any]] = None) -> str:
         """
         主入口：处理用户消息。
@@ -1301,6 +1310,67 @@ class AIEngineV2:
                     temperature=0.2,
                     max_tokens=800,
                 )
+
+                # 计算字符数和精确 token 数
+                system_char_count = len(system_prompt)
+                user_char_count = len(user_prompt)
+                response_text = json.dumps(raw_plan, ensure_ascii=False)
+                response_char_count = len(response_text)
+
+                # 使用 tiktoken 精确计算 token 数量
+                if self.token_encoder:
+                    try:
+                        system_token_count = len(self.token_encoder.encode(system_prompt))
+                        user_token_count = len(self.token_encoder.encode(user_prompt))
+                        response_token_count = len(self.token_encoder.encode(response_text))
+                    except Exception as e:
+                        logger.warning("tiktoken_encode_failed", error=str(e))
+                        # 降级到简单估算
+
+                        def estimate_tokens(text: str) -> int:
+                            chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+                            other_chars = len(text) - chinese_chars
+                            return int(chinese_chars * 1.5 + other_chars * 0.25)
+
+                        system_token_count = estimate_tokens(system_prompt)
+                        user_token_count = estimate_tokens(user_prompt)
+                        response_token_count = estimate_tokens(response_text)
+                else:
+                    # 降级到简单估算
+
+                    def estimate_tokens(text: str) -> int:
+                        chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+                        other_chars = len(text) - chinese_chars
+                        return int(chinese_chars * 1.5 + other_chars * 0.25)
+
+                    system_token_count = estimate_tokens(system_prompt)
+                    user_token_count = estimate_tokens(user_prompt)
+                    response_token_count = estimate_tokens(response_text)
+
+                logger.info(
+                    "agent.loop.llm_io_stats",
+                    trace_id=state.trace_id,
+                    turn=turn_index + 1,
+                    system_prompt_chars=system_char_count,
+                    system_prompt_tokens=system_token_count,
+                    user_prompt_chars=user_char_count,
+                    user_prompt_tokens=user_token_count,
+                    response_chars=response_char_count,
+                    response_tokens=response_token_count,
+                    total_input_tokens=system_token_count + user_token_count,
+                    total_output_tokens=response_token_count,
+                )
+
+                # 打印详细内容（仅在 DEBUG 模式下，由 structlog 配置控制）
+                logger.debug(
+                    "agent.loop.llm_prompts",
+                    trace_id=state.trace_id,
+                    turn=turn_index + 1,
+                    system_prompt=system_prompt[:500] + "..." if len(system_prompt) > 500 else system_prompt,
+                    user_prompt=user_prompt[:1000] + "..." if len(user_prompt) > 1000 else user_prompt,
+                    raw_plan=raw_plan,
+                )
+
                 turn_metrics["planning_llm_ms"] = int((time.perf_counter() - llm_start) * 1000)
             except Exception as exc:
                 logger.error("agent.loop.llm_failed", trace_id=state.trace_id, error=str(exc))

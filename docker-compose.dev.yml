@@ -1,0 +1,56 @@
+# Docker Compose 开发环境覆盖配置
+# 使用方式：
+#   开发环境：docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+#   或复制为 docker-compose.override.yml 后直接：docker-compose up
+
+version: '3.8'
+
+services:
+  faa-api:
+    build:
+      dockerfile: docker/Dockerfile.dev  # 使用开发 Dockerfile
+    
+    volumes:
+      # 开发环境：挂载源代码实现热重载
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./prompts:/app/prompts
+      - ./scripts:/app/scripts
+      - ./examples:/app/examples
+      - ./tests:/app/tests
+      - ./alembic:/app/alembic
+      - ./data:/app/data
+      # 保留生产环境的 volumes
+      - ./family_private_data.json:/app/family_private_data.json:ro
+      - media_data:/data/media
+      - fastembed_cache:/data/fastembed_cache
+    
+    command: sh -c "/app/.venv/bin/alembic upgrade head && /app/.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload"
+    
+    environment:
+      # 开发环境配置覆盖
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+      - APP_ENV=development
+      - LOG_DIR=logs  # 开发环境可选本地日志
+
+  faa-mcp:
+    build:
+      dockerfile: docker/Dockerfile.dev  # 使用开发 Dockerfile
+    
+    volumes:
+      # 开发环境：挂载源代码
+      - ./mcp-server:/app/mcp-server
+      - ./alembic:/app/alembic
+      - ./src:/app/src  # MCP 可能需要访问共享代码
+      # 保留生产环境的 volumes
+      - media_data:/data/media
+      - fastembed_cache:/data/fastembed_cache
+    
+    environment:
+      # 开发环境配置覆盖
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+      - APP_ENV=development
+      - LOG_DIR=logs
+

@@ -1,0 +1,61 @@
+# Docker Compose 本地开发覆盖配置示例
+# 
+# 使用方法：
+#   1. 复制此文件为 docker-compose.override.yml
+#      cp docker-compose.override.yml.example docker-compose.override.yml
+#   
+#   2. 直接运行（自动加载 override）
+#      docker-compose up
+#
+# 注意：
+#   - docker-compose.override.yml 已被 .gitignore 忽略
+#   - 这样每个开发者可以有自己的本地配置
+#   - 生产环境不会有此文件
+
+version: '3.8'
+
+services:
+  faa-api:
+    build:
+      dockerfile: docker/Dockerfile.dev  # 使用开发 Dockerfile
+    
+    volumes:
+      # 开发环境：挂载源代码实现热重载
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./prompts:/app/prompts
+      - ./scripts:/app/scripts
+      - ./examples:/app/examples
+      - ./tests:/app/tests
+      - ./alembic:/app/alembic
+      - ./data:/app/data
+      - ./family_private_data.json:/app/family_private_data.json:ro
+      - media_data:/data/media
+      - fastembed_cache:/data/fastembed_cache
+    
+    command: sh -c "/app/.venv/bin/alembic upgrade head && /app/.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload"
+    
+    environment:
+      # 开发环境配置覆盖
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+      - APP_ENV=development
+      - LOG_DIR=logs
+
+  faa-mcp:
+    build:
+      dockerfile: docker/Dockerfile.dev
+    
+    volumes:
+      - ./mcp-server:/app/mcp-server
+      - ./alembic:/app/alembic
+      - ./src:/app/src
+      - media_data:/data/media
+      - fastembed_cache:/data/fastembed_cache
+    
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+      - APP_ENV=development
+      - LOG_DIR=logs
+

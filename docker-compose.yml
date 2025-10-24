@@ -22,11 +22,17 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "10"
+        compress: "true"
 
   faa-api:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile  # 生产环境 Dockerfile
     ports:
       - "8001:8000"
     env_file:
@@ -38,6 +44,8 @@ services:
       - MCP_SERVER_URL=http://faa-mcp:8000
       - MEDIA_ROOT=/data/media
       - FASTEMBED_CACHE_PATH=/data/fastembed_cache
+      # 日志配置（生产环境不写文件，由 Docker 管理）
+      - LOG_DIR=
       # 其他所有配置从 .env 自动加载
     depends_on:
       postgres:
@@ -45,23 +53,23 @@ services:
       faa-mcp:
         condition: service_started
     volumes:
-      - ./src:/app/src
-      - ./scripts:/app/scripts
-      - ./examples:/app/examples
-      - ./tests:/app/tests
-      - ./data:/app/data
-      - ./config:/app/config
-      - ./prompts:/app/prompts
-      - ./alembic:/app/alembic
+      # 生产环境最小化挂载
       - ./family_private_data.json:/app/family_private_data.json:ro
       - media_data:/data/media
       - fastembed_cache:/data/fastembed_cache
-    command: sh -c "/app/.venv/bin/alembic upgrade head && /app/.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload"
+    command: sh -c "/app/.venv/bin/alembic upgrade head && /app/.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "10"
+        compress: "true"
+        labels: "service=faa-api,env=production"
 
   faa-mcp:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile  # 生产环境 Dockerfile
     env_file:
       - .env
     environment:
@@ -70,6 +78,8 @@ services:
       - DATABASE_URL=postgresql://faa:${POSTGRES_PASSWORD:-faa_secret}@postgres:5432/family_assistant
       - MEDIA_ROOT=/data/media
       - FASTEMBED_CACHE_PATH=/data/fastembed_cache
+      # 日志配置（生产环境不写文件，由 Docker 管理）
+      - LOG_DIR=
       # 其他所有配置从 .env 自动加载
     depends_on:
       postgres:
@@ -77,13 +87,34 @@ services:
     ports:
       - "9000:8000"  # MCP 服务端口
     volumes:
-      - ./mcp-server:/app/mcp-server
-      - ./alembic:/app/alembic
+      # 生产环境最小化挂载
       - media_data:/data/media
       - fastembed_cache:/data/fastembed_cache
     command: python mcp-server/mcp_http_wrapper.py
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "10"
+        compress: "true"
+        labels: "service=faa-mcp,env=production"
 
 volumes:
+  # Named Volumes - Docker 管理的持久化存储
+  # 优点：性能好、跨平台、自动管理权限
+  # 实际位置：/var/lib/docker/volumes/<project>_<volume_name>/_data
+  
   postgres_data:
+    # 数据库文件
+    # 备份方式：pg_dump（不直接操作文件）
+    # 预计大小：随使用增长，建议监控
+  
   media_data:
+    # 用户上传的媒体文件（图片、音频、视频）
+    # 备份方式：docker run --rm -v 复制或通过容器访问
+    # 预计大小：随使用增长，需要定期清理
+  
   fastembed_cache:
+    # FastEmbed 模型缓存（约 300-500MB）
+    # 可重新下载，丢失不影响功能
+    # 无需备份
